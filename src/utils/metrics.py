@@ -4,7 +4,6 @@ import numpy as np
 import editdistance
 import string
 import math
-from IPython import embed
 import torch
 import torch.nn.functional as F
 import sys
@@ -39,7 +38,7 @@ def get_str_list(output, target, dataset=None):
                     try:
                         pred_list_i.append(dataset.id2char[output[i, j]])
                     except:
-                        embed(header='problem')
+                        raise
             else:
                 break
         pred_list.append(pred_list_i)
@@ -72,7 +71,7 @@ def _lexicon_search(lexicon, word):
     edit_distances = []
     for lex_word in lexicon:
         edit_distances.append(editdistance.eval(_normalize_text(lex_word), _normalize_text(word)))
-    edit_distances = np.asarray(edit_distances, dtype=np.int)
+    edit_distances = np.asarray(edit_distances, dtype=int)
     argmin = np.argmin(edit_distances)
     return lexicon[argmin]
 

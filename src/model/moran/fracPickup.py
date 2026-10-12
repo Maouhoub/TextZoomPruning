@@ -43,6 +43,6 @@ class fracPickup(nn.Module):
             grid = grid.cuda()
         self.grid = Variable(grid, requires_grad=False)
 
-        x_offset = nn.functional.grid_sample(x, self.grid)
+        x_offset = nn.functional.grid_sample(x, self.grid, align_corners=True)
 
         return x_offset

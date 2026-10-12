@@ -17,7 +17,6 @@ import string
 sys.path.append('../')
 from utils import str_filt
 from utils.labelmaps import get_vocabulary, labels2strs
-from IPython import embed
 random.seed(0)
 
 

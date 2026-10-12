@@ -1,5 +1,4 @@
 from scipy.io import loadmat
-from IPython import embed
 from PIL import Image
 from tqdm import tqdm
 import os

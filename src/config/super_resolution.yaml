@@ -11,7 +11,7 @@ TRAIN:
   height: 32
   epochs: 500
   cuda: True
-  ngpu: 4
+  ngpu: 1  # >1 wraps models in DataParallel
   workers: 2
   resume: ''
   ckpt_dir: './ckpt/'

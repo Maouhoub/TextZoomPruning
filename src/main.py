@@ -2,7 +2,6 @@ import yaml
 import sys
 import argparse
 import os
-from IPython import embed
 from easydict import EasyDict
 from interfaces.super_resolution import TextSR
 

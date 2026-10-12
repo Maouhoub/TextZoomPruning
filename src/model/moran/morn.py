@@ -46,7 +46,7 @@ class MORN(nn.Module):
     def forward(self, x, test, enhance=1, debug=False):
 
         if not test and np.random.random() > 0.5:
-            return nn.functional.upsample(x, size=(self.targetH, self.targetW), mode='bilinear')
+            return nn.functional.interpolate(x, size=(self.targetH, self.targetW), mode='bilinear')
         if not test:
             enhance = 0
 
@@ -56,17 +56,18 @@ class MORN(nn.Module):
         grid = self.grid[:x.size(0)]
         grid_x = self.grid_x[:x.size(0)]
         grid_y = self.grid_y[:x.size(0)]
-        x_small = nn.functional.upsample(x, size=(self.targetH, self.targetW), mode='bilinear')
+        x_small = nn.functional.interpolate(x, size=(self.targetH, self.targetW), mode='bilinear')
 
         offsets = self.cnn(x_small)
         offsets_posi = nn.functional.relu(offsets, inplace=False)
         offsets_nega = nn.functional.relu(-offsets, inplace=False)
         offsets_pool = self.pool(offsets_posi) - self.pool(offsets_nega)
 
-        offsets_grid = nn.functional.grid_sample(offsets_pool, grid)
+        # align_corners=True reproduces PyTorch < 1.3 grid_sample, which MORAN was trained with.
+        offsets_grid = nn.functional.grid_sample(offsets_pool, grid, align_corners=True)
         offsets_grid = offsets_grid.permute(0, 2, 3, 1).contiguous()
         offsets_x = torch.cat([grid_x, grid_y + offsets_grid], 3)
-        x_rectified = nn.functional.grid_sample(x, offsets_x)
+        x_rectified = nn.functional.grid_sample(x, offsets_x, align_corners=True)
 
         for iteration in range(enhance):
             offsets = self.cnn(x_rectified)
@@ -75,9 +76,9 @@ class MORN(nn.Module):
             offsets_nega = nn.functional.relu(-offsets, inplace=False)
             offsets_pool = self.pool(offsets_posi) - self.pool(offsets_nega)
 
-            offsets_grid += nn.functional.grid_sample(offsets_pool, grid).permute(0, 2, 3, 1).contiguous()
+            offsets_grid += nn.functional.grid_sample(offsets_pool, grid, align_corners=True).permute(0, 2, 3, 1).contiguous()
             offsets_x = torch.cat([grid_x, grid_y + offsets_grid], 3)
-            x_rectified = nn.functional.grid_sample(x, offsets_x)
+            x_rectified = nn.functional.grid_sample(x, offsets_x, align_corners=True)
 
         if debug:
 

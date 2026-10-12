@@ -8,7 +8,6 @@ import torchvision.datasets as d_sets
 from torch.utils.data import DataLoader as d_loader
 import matplotlib.pyplot as plt
 from PIL import Image
-from IPython import embed
 import sys
 sys.path.append('./')
 from .recognizer.tps_spatial_transformer import TPSSpatialTransformer
@@ -55,4 +54,4 @@ class SRCNN(nn.Module):
 
 
 if __name__=='__main__':
-    embed()
+    pass

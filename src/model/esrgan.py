@@ -3,7 +3,6 @@ import torch
 import torch.nn as nn
 import math
 import torch.nn.functional as F
-from IPython import embed
 
 
 def make_layer(block, n_layers):
@@ -142,4 +141,4 @@ class SubDiscriminator(nn.Module):
 
 
 if __name__ == '__main__':
-    embed()
+    pass

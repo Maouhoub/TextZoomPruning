@@ -1,7 +1,6 @@
 import torch
 import torch.nn as nn
 from math import sqrt
-from IPython import embed
 import sys
 sys.path.append('./')
 from .recognizer.tps_spatial_transformer import TPSSpatialTransformer
@@ -68,4 +67,4 @@ class VDSR(nn.Module):
 
 
 if __name__=='__main__':
-    embed()
+    pass

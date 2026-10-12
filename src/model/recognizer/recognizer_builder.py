@@ -105,5 +105,4 @@ class RecognizerBuilder(nn.Module):
 
 
 if __name__ == '__main__':
-    from IPython import embed
-    embed()
+    pass

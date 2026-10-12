@@ -5,13 +5,13 @@ from tqdm import tqdm
 import math
 import torch.nn as nn
 import torch.optim as optim
-from IPython import embed
 import math
 import cv2
 import string
 from PIL import Image
 import torchvision
 from torchvision import transforms
+from torchvision.transforms import InterpolationMode
 from torch.autograd import Variable
 from collections import OrderedDict
 
@@ -149,17 +149,18 @@ class TextBase(object):
         if self.args.arch != 'bicubic':
             model = model.to(self.device)
             image_crit.to(self.device)
-            if cfg.ngpu >= 1:
+            # Checkpoints store the unwrapped state dict, so load before any DataParallel wrapping.
+            if self.resume:
+                print('loading pre-trained model from %s ' % self.resume)
+                model.load_state_dict(torch.load(self.resume, weights_only=False)['state_dict_G'])
+            if cfg.ngpu > 1:
                 model = torch.nn.DataParallel(model, device_ids=range(cfg.ngpu))
                 image_crit = torch.nn.DataParallel(image_crit, device_ids=range(cfg.ngpu))
-            if self.resume is not '':
-                print('loading pre-trained model from %s ' % self.resume)
-                if self.config.TRAIN.ngpu == 1:
-                    model.load_state_dict(torch.load(self.resume)['state_dict_G'])
-                else:
-                    model.load_state_dict(
-                        {'module.' + k: v for k, v in torch.load(self.resume)['state_dict_G'].items()})
         return {'model': model, 'crit': image_crit}
+
+    @staticmethod
+    def unwrap(model):
+        return model.module if isinstance(model, torch.nn.DataParallel) else model
 
     def optimizer_init(self, model):
         cfg = self.config.TRAIN
@@ -173,7 +174,7 @@ class TextBase(object):
             tensor_in = image_in[i][:3,:,:]
             transform = transforms.Compose(
                 [transforms.ToPILImage(),
-                 transforms.Resize((image_target.shape[-2], image_target.shape[-1]), interpolation=Image.BICUBIC),
+                 transforms.Resize((image_target.shape[-2], image_target.shape[-1]), interpolation=InterpolationMode.BICUBIC),
                  transforms.ToTensor()]
             )
 
@@ -184,14 +185,11 @@ class TextBase(object):
             vis_im = torch.stack(images)
             vis_im = torchvision.utils.make_grid(vis_im, nrow=1, padding=0)
             out_root = os.path.join('./demo', self.vis_dir)
-            if not os.path.exists(out_root):
-                os.mkdir(out_root)
             out_path = os.path.join(out_root, str(index))
-            if not os.path.exists(out_path):
-                os.mkdir(out_path)
+            os.makedirs(out_path, exist_ok=True)
             im_name = pred_str_lr[i] + '_' + pred_str_sr[i] + '_' + label_strs[i] + '_.png'
             im_name = im_name.replace('/', '')
-            if index is not 0:
+            if index != 0:
                 torchvision.utils.save_image(vis_im, os.path.join(out_path, im_name), padding=0)
 
     def test_display(self, image_in, image_out, image_target, pred_str_lr, pred_str_sr, label_strs, str_filt):
@@ -206,7 +204,7 @@ class TextBase(object):
                     tensor_target = image_target[i].cpu()
                     transform = transforms.Compose(
                         [transforms.ToPILImage(),
-                         transforms.Resize((image_target.shape[-2], image_target.shape[-1]), interpolation=Image.BICUBIC),
+                         transforms.Resize((image_target.shape[-2], image_target.shape[-1]), interpolation=InterpolationMode.BICUBIC),
                          transforms.ToTensor()]
                     )
                     tensor_in = transform(tensor_in)
@@ -214,10 +212,7 @@ class TextBase(object):
                     vis_im = torch.stack(images)
                     vis_im = torchvision.utils.make_grid(vis_im, nrow=1, padding=0)
                     out_root = os.path.join('./display', self.vis_dir)
-                    if not os.path.exists(out_root):
-                        os.mkdir(out_root)
-                    if not os.path.exists(out_root):
-                        os.mkdir(out_root)
+                    os.makedirs(out_root, exist_ok=True)
                     im_name = pred_str_lr[i] + '_' + pred_str_sr[i] + '_' + label_strs[i] + '_.png'
                     im_name = im_name.replace('/', '')
                     torchvision.utils.save_image(vis_im, os.path.join(out_root, im_name), padding=0)
@@ -225,15 +220,14 @@ class TextBase(object):
 
     def save_checkpoint(self, netG, epoch, iters, best_acc_dict, best_model_info, is_best, converge_list):
         ckpt_path = os.path.join('ckpt', self.vis_dir)
-        if not os.path.exists(ckpt_path):
-            os.mkdir(ckpt_path)
+        os.makedirs(ckpt_path, exist_ok=True)
         save_dict = {
-            'state_dict_G': netG.module.state_dict(),
+            'state_dict_G': self.unwrap(netG).state_dict(),
             'info': {'arch': self.args.arch, 'iters': iters, 'epochs': epoch, 'batch_size': self.batch_size,
                      'voc_type': self.voc_type, 'up_scale_factor': self.scale_factor},
             'best_history_res': best_acc_dict,
             'best_model_info': best_model_info,
-            'param_num': sum([param.nelement() for param in netG.module.parameters()]),
+            'param_num': sum([param.nelement() for param in self.unwrap(netG).parameters()]),
             'converge': converge_list
         }
         if is_best:
@@ -248,14 +242,15 @@ class TextBase(object):
                             inputDataType='torch.cuda.FloatTensor', CUDA=True)
         model_path = self.config.TRAIN.VAL.moran_pretrained
         print('loading pre-trained moran model from %s' % model_path)
-        state_dict = torch.load(model_path)
+        state_dict = torch.load(model_path, weights_only=False)
         MORAN_state_dict_rename = OrderedDict()
         for k, v in state_dict.items():
             name = k.replace("module.", "")  # remove `module.`
             MORAN_state_dict_rename[name] = v
         MORAN.load_state_dict(MORAN_state_dict_rename)
         MORAN = MORAN.to(self.device)
-        MORAN = torch.nn.DataParallel(MORAN, device_ids=range(cfg.ngpu))
+        if cfg.ngpu > 1:
+            MORAN = torch.nn.DataParallel(MORAN, device_ids=range(cfg.ngpu))
         for p in MORAN.parameters():
             p.requires_grad = False
         MORAN.eval()
@@ -281,7 +276,7 @@ class TextBase(object):
         model = model.to(self.device)
         model_path = self.config.TRAIN.VAL.crnn_pretrained
         print('loading pretrained crnn model from %s' % model_path)
-        model.load_state_dict(torch.load(model_path))
+        model.load_state_dict(torch.load(model_path, weights_only=False))
         return model
 
     def parse_crnn_data(self, imgs_input):
@@ -298,10 +293,11 @@ class TextBase(object):
         aster = recognizer.RecognizerBuilder(arch='ResNet_ASTER', rec_num_classes=aster_info.rec_num_classes,
                                              sDim=512, attDim=512, max_len_labels=aster_info.max_len,
                                              eos=aster_info.char2id[aster_info.EOS], STN_ON=True)
-        aster.load_state_dict(torch.load(self.config.TRAIN.VAL.rec_pretrained)['state_dict'])
+        aster.load_state_dict(torch.load(self.config.TRAIN.VAL.rec_pretrained, weights_only=False)['state_dict'])
         print('load pred_trained aster model from %s' % self.config.TRAIN.VAL.rec_pretrained)
         aster = aster.to(self.device)
-        aster = torch.nn.DataParallel(aster, device_ids=range(cfg.ngpu))
+        if cfg.ngpu > 1:
+            aster = torch.nn.DataParallel(aster, device_ids=range(cfg.ngpu))
         return aster, aster_info
 
     def parse_aster_data(self, imgs_input):
@@ -311,7 +307,8 @@ class TextBase(object):
         images_input = imgs_input.to(self.device)
         input_dict['images'] = images_input * 2 - 1
         batch_size = images_input.shape[0]
-        input_dict['rec_targets'] = torch.IntTensor(batch_size, aster_info.max_len).fill_(1)
+        # Without DataParallel nothing scatters the targets to the GPU, so move them explicitly.
+        input_dict['rec_targets'] = torch.IntTensor(batch_size, aster_info.max_len).fill_(1).to(self.device)
         input_dict['rec_lengths'] = [aster_info.max_len] * batch_size
         return input_dict
 

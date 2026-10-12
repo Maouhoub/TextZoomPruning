@@ -8,7 +8,6 @@ import torch
 from torch import nn
 from torch.nn import functional as F
 from torch.nn import init
-from IPython import embed
 
 
 def conv3x3_block(in_planes, out_planes, stride=1):
@@ -76,7 +75,7 @@ class STNHead(nn.Module):
     ctrl_pts_top = np.stack([ctrl_pts_x, ctrl_pts_y_top], axis=1)
     ctrl_pts_bottom = np.stack([ctrl_pts_x, ctrl_pts_y_bottom], axis=1)
     ctrl_points = np.concatenate([ctrl_pts_top, ctrl_pts_bottom], axis=0).astype(np.float32)
-    if self.activation is 'none':
+    if self.activation == 'none':
       pass
     elif self.activation == 'sigmoid':
       ctrl_points = -np.log(1. / ctrl_points - 1.)
@@ -91,7 +90,7 @@ class STNHead(nn.Module):
     img_feat = self.stn_fc1(x)
     x = self.stn_fc2(0.1 * img_feat)
     if self.activation == 'sigmoid':
-      x = F.sigmoid(x)
+      x = torch.sigmoid(x)
     x = x.view(-1, self.num_ctrlpoints, 2)
     return img_feat, x
 
@@ -104,4 +103,4 @@ if __name__ == "__main__":
   input = torch.randn(10, 3, 32, 128)
   control_points = stn_head(input)    
   # print(control_points.size())
-  embed()
+  pass

@@ -1,16 +1,12 @@
 # A super-resolution dataset consists of paired LR-HR scene text images.
 
 ## Requirements
-- 1.0.1 <= torch < 1.6.0
-- torchvision -c pytorch
-- lmdb >= 0.98
-- pillow >= 7.1.2
-- numpy
-- six
-- tqdm
-- python-opencv
-- easydict
-- yaml
+This fork runs on Python 3.12 with torch 2.5.1 / torchvision 0.20.1 (see `requirements.txt`):
+
+`pip install -r requirements.txt`
+
+Set `TRAIN.ngpu` in `src/config/super_resolution.yaml` to the number of GPUs (default 1).
+MORAN evaluation needs `--batch_size` <= 256.
 
 ## Train and Test
 

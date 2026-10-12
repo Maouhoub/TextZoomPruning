@@ -6,7 +6,6 @@ import torch
 from torch import nn
 from torch.nn import functional as F
 from torch.nn import init
-from IPython import embed
 
 class AttentionRecognitionHead(nn.Module):
   """
@@ -108,7 +107,7 @@ class AttentionRecognitionHead(nn.Module):
       sequence_scores = scores.view(batch_size * beam_width, 1)
 
       # Update fields for next timestep
-      predecessors = (candidates / self.num_classes + pos_index.expand_as(candidates)).view(batch_size * beam_width, 1)
+      predecessors = (torch.div(candidates, self.num_classes, rounding_mode='floor') + pos_index.expand_as(candidates)).view(batch_size * beam_width, 1)
       state = state.index_select(1, predecessors.squeeze())
 
       # Update sequence socres and erase scores for <eos> symbol so that they aren't expanded
@@ -150,7 +149,7 @@ class AttentionRecognitionHead(nn.Module):
           # with b*k as the first dimension, and b, k for
           # the first two dimensions
           idx = eos_indices[i]
-          b_idx = int(idx[0] / beam_width)
+          b_idx = int(idx[0]) // beam_width
           # The indices of the replacing position
           # according to the replacement strategy noted above
           res_k_idx = beam_width - (batch_eos_found[b_idx] % beam_width) - 1
@@ -214,8 +213,6 @@ class AttentionUnit(nn.Module):
     xProj = xProj.view(batch_size, T, -1)            # [b x T x attDim]
 
     sPrev = sPrev.squeeze(0)
-    from IPython import embed;
-    # embed()
     sProj = self.sEmbed(sPrev)                       # [b x attDim]
     sProj = torch.unsqueeze(sProj, 1)                # [b x 1 x attDim]
     sProj = sProj.expand(batch_size, T, self.attDim) # [b x T x attDim]

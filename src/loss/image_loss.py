@@ -3,7 +3,6 @@ import torch.nn.functional as F
 import torch.nn as nn
 import numpy as np
 from PIL import Image
-from IPython import embed
 from torchvision import transforms
 
 
@@ -53,4 +52,4 @@ if __name__ == '__main__':
     im2 = Image.open('../tt1.jpg')
     im2 = transforms.ToTensor()(im2)
     im2 = im2.unsqueeze(0)
-    embed()
+    pass

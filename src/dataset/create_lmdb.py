@@ -11,7 +11,6 @@ from tqdm import tqdm
 import re, time
 import random
 import six
-from IPython import embed
 
 
 def rand_crop(im):
@@ -28,7 +27,7 @@ def buf2PIL(txn, key, type='RGB', degree=0):
     buf.write(imgbuf)
     buf.seek(0)
     im = Image.open(buf).convert(type)
-    if degree is not 0:
+    if degree != 0:
         im = im.rotate(angle=degree, resample=Image.BICUBIC)
     return im
 
@@ -359,8 +358,7 @@ def create_total_text():
             image_labels.append(label_str)
             image_paths.append(image_path)
         except OSError:
-            embed()
-    embed()
+            raise
     print('there are all %d images' % len(image_paths))
 
     createDataset_detection(lmdb_output_path, image_paths, box_x_list, box_y_list,

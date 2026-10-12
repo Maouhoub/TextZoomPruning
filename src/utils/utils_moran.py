@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 from torch.autograd import Variable
-import collections
+import collections.abc
 
 class strLabelConverterForAttention(object):
     """Convert between str and label.
@@ -70,7 +70,7 @@ class strLabelConverterForAttention(object):
                 for char in text
             ]
             length = [len(text)]
-        elif isinstance(text, collections.Iterable):
+        elif isinstance(text, collections.abc.Iterable):
             length = [len(s) for s in text]
             text = ''.join(text)
             text, _ = self.encode(text)

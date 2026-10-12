@@ -3,7 +3,6 @@ import torch.nn.functional as F
 import torch.nn as nn
 import numpy as np
 from PIL import Image
-from IPython import embed
 from torchvision import transforms
 
 
@@ -29,4 +28,4 @@ class GradientPriorLoss(nn.Module):
 
 
 if __name__ == '__main__':
-    embed()
+    pass

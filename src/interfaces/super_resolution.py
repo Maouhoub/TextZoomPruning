@@ -8,7 +8,6 @@ from tqdm import tqdm
 import math
 import copy
 from utils import util, ssim_psnr
-from IPython import embed
 from torchvision import transforms
 from torch.autograd import Variable
 import torch.nn as nn
@@ -213,9 +212,8 @@ class TextSR(base.TextBase):
 
             if self.args.rec == 'moran':
                 moran_input = self.parse_moran_data(images_sr[:, :3, :, :])
-                moran_output = moran(moran_input[0], moran_input[1], moran_input[2], moran_input[3], test=True,
-                                     debug=True)
-                preds, preds_reverse = moran_output[0]
+                moran_output = moran(moran_input[0], moran_input[1], moran_input[2], moran_input[3], test=True)
+                preds, preds_reverse = moran_output
                 _, preds = preds.max(1)
                 sim_preds = self.converter_moran.decode(preds.data, moran_input[1].data)
                 pred_str_sr = [pred.split('$')[0] for pred in sim_preds]
@@ -302,17 +300,15 @@ class TextSR(base.TextBase):
             sr_time += sr_end - sr_beigin
             if self.args.rec == 'moran':
                 moran_input = self.parse_moran_data(images_sr[:, :3, :, :])
-                moran_output = moran(moran_input[0], moran_input[1], moran_input[2], moran_input[3], test=True,
-                                     debug=True)
-                preds, preds_reverse = moran_output[0]
+                moran_output = moran(moran_input[0], moran_input[1], moran_input[2], moran_input[3], test=True)
+                preds, preds_reverse = moran_output
                 _, preds = preds.max(1)
                 sim_preds = self.converter_moran.decode(preds.data, moran_input[1].data)
                 pred_str_sr = [pred.split('$')[0] for pred in sim_preds]
 
                 moran_input_lr = self.parse_moran_data(images_lr[:, :3, :, :])
-                moran_output_lr = moran(moran_input_lr[0], moran_input_lr[1], moran_input_lr[2], moran_input_lr[3], test=True,
-                                     debug=True)
-                preds_lr, preds_reverse_lr = moran_output_lr[0]
+                moran_output_lr = moran(moran_input_lr[0], moran_input_lr[1], moran_input_lr[2], moran_input_lr[3], test=True)
+                preds_lr, preds_reverse_lr = moran_output_lr
                 _, preds_lr = preds_lr.max(1)
                 sim_preds_lr = self.converter_moran.decode(preds_lr.data, moran_input_lr[1].data)
                 pred_str_lr = [pred.split('$')[0] for pred in sim_preds_lr]
@@ -349,4 +345,4 @@ class TextSR(base.TextBase):
 
 
 if __name__ == '__main__':
-    embed()
+    pass

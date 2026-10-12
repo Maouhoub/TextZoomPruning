@@ -2,7 +2,6 @@ import torch
 import torch.nn as nn
 import numpy as np
 import math
-from IPython import embed
 from .recognizer.tps_spatial_transformer import TPSSpatialTransformer
 from .recognizer.stn_head import STNHead
 
@@ -138,4 +137,4 @@ class L1_Charbonnier_loss(nn.Module):
 
 
 if __name__=='__main__':
-    embed()
+    pass

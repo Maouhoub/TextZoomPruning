@@ -2,7 +2,6 @@ import functools
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from IPython import embed
 
 
 def make_layer(block, n_layers):
@@ -150,4 +149,4 @@ class Discriminator(nn.Module):
 
 
 if __name__ == '__main__':
-    embed()
+    pass

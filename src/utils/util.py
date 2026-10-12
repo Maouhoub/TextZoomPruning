@@ -4,9 +4,8 @@
 import torch
 import torch.nn as nn
 from torch.autograd import Variable
-import collections
+import collections.abc
 import string
-from IPython import embed
 
 
 def str_filt(str_, voc_type):
@@ -54,14 +53,12 @@ class strLabelConverter(object):
             torch.IntTensor [n]: length of each text.
         """
         if isinstance(text, str):
-            from IPython import embed
-            # embed()
             text = [
                 self.dict[char]
                 for char in text
             ]
             length = [len(text)]
-        elif isinstance(text, collections.Iterable):
+        elif isinstance(text, collections.abc.Iterable):
             length = [len(s) for s in text]
             text = ''.join(text)
             text, _ = self.encode(text)
@@ -152,8 +149,8 @@ def loadData(v, data):
 
 def prettyPrint(v):
     print('Size {0}, Type: {1}'.format(str(v.size()), v.data.type()))
-    print('| Max: %f | Min: %f | Mean: %f' % (v.max().data[0], v.min().data[0],
-                                              v.mean().data[0]))
+    print('| Max: %f | Min: %f | Mean: %f' % (v.max().item(), v.min().item(),
+                                              v.mean().item()))
 
 
 def assureRatio(img):
@@ -167,4 +164,4 @@ def assureRatio(img):
 
 if __name__=='__main__':
     converter = strLabelConverter(string.digits+string.ascii_lowercase)
-    embed()
+    pass

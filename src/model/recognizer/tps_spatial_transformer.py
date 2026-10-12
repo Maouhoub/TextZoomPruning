@@ -7,16 +7,17 @@ import itertools
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from IPython import embed
 
 
+# align_corners=True reproduces the grid_sample behaviour of PyTorch < 1.3,
+# which the pretrained ASTER weights were trained with.
 def grid_sample(input, grid, canvas = None):
-  output = F.grid_sample(input, grid)
+  output = F.grid_sample(input, grid, align_corners=True)
   if canvas is None:
     return output
   else:
     input_mask = input.data.new(input.size()).fill_(1)
-    output_mask = F.grid_sample(input_mask, grid)
+    output_mask = F.grid_sample(input_mask, grid, align_corners=True)
     padded_output = output * output_mask + canvas * (1 - output_mask)
     return padded_output
 
@@ -116,4 +117,4 @@ class TPSSpatialTransformer(nn.Module):
 
 
 if __name__=='__main__':
-  embed()
+  pass
