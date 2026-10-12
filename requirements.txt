@@ -1,13 +1,14 @@
 # TextZoom / TSRN, migrated to the same stack as the SwinIR structured-pruning project
-# (Python 3.12, Colab/Kaggle).
+# Pinned to the oldest releases with Python 3.13 wheels (current Colab), closest to the
+# torch 2.5.1 used in Chapter 1.
 #
 # Installation:
 #   pip install -r requirements.txt
 
-# Deep learning stack (pinned to match the pruning project)
-torch==2.5.1
-torchvision==0.20.1
-numpy==2.0.2
+# Deep learning stack
+torch==2.6.0
+torchvision==0.21.0
+numpy==2.1.3
 torch-pruning==1.6.1
 
 # Data and image processing

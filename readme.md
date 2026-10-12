@@ -1,7 +1,7 @@
 # A super-resolution dataset consists of paired LR-HR scene text images.
 
 ## Requirements
-This fork runs on Python 3.12 with torch 2.5.1 / torchvision 0.20.1 (see `requirements.txt`):
+This fork runs on Python 3.13 with torch 2.6.0 / torchvision 0.21.0 (see `requirements.txt`):
 
 `pip install -r requirements.txt`
 
