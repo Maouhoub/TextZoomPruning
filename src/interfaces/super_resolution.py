@@ -117,6 +117,7 @@ class TextSR(base.TextBase):
                     best_model_info = {'accuracy': best_model_acc, 'psnr': best_model_psnr, 'ssim': best_model_ssim}
                     self.save_checkpoint(model, epoch, iters, best_history_acc, best_model_info, False, converge_list)
 
+    @torch.no_grad()
     def eval(self, model, val_loader, image_crit, index, aster, aster_info):
         for p in model.parameters():
             p.requires_grad = False
@@ -170,6 +171,7 @@ class TextSR(base.TextBase):
         metric_dict['ssim_avg'] = ssim_avg
         return metric_dict
 
+    @torch.no_grad()
     def test(self):
         model_dict = self.generator_init()
         model, image_crit = model_dict['model'], model_dict['crit']
@@ -255,6 +257,7 @@ class TextSR(base.TextBase):
         result = {'accuracy': current_acc_dict, 'psnr_avg': psnr_avg, 'ssim_avg': ssim_avg, 'fps': fps}
         print(result)
 
+    @torch.no_grad()
     def demo(self):
         mask_ = self.args.mask
 
