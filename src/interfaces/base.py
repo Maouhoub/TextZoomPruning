@@ -150,9 +150,11 @@ class TextBase(object):
             model = model.to(self.device)
             image_crit.to(self.device)
             # Checkpoints store the unwrapped state dict, so load before any DataParallel wrapping.
+            # weights_only=True: SR checkpoints hold only tensors and plain values, and may come
+            # from third parties, so anything else is refused instead of executed.
             if self.resume:
                 print('loading pre-trained model from %s ' % self.resume)
-                model.load_state_dict(torch.load(self.resume, weights_only=False)['state_dict_G'])
+                model.load_state_dict(torch.load(self.resume, weights_only=True)['state_dict_G'])
             if cfg.ngpu > 1:
                 model = torch.nn.DataParallel(model, device_ids=range(cfg.ngpu))
                 image_crit = torch.nn.DataParallel(image_crit, device_ids=range(cfg.ngpu))
