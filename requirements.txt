@@ -24,5 +24,5 @@ editdistance>=0.6.2
 tqdm>=4.60.0
 
 # Model analysis
-ptflops>=0.6.9
+ptflops>=0.7.3  # backend= argument, used to count GRU MACs with module hooks
 thop>=0.1.1

@@ -23,6 +23,7 @@ from dataset import lmdbDataset, alignCollate_real, ConcatDataset, lmdbDataset_r
 from loss import gradient_loss, percptual_loss, image_loss
 
 from utils.labelmaps import get_vocabulary, labels2strs
+from utils.metrics import get_str_list
 
 sys.path.append('../')
 from utils import util, ssim_psnr, utils_moran, utils_crnn
@@ -313,6 +314,41 @@ class TextBase(object):
         input_dict['rec_targets'] = torch.IntTensor(batch_size, aster_info.max_len).fill_(1).to(self.device)
         input_dict['rec_lengths'] = [aster_info.max_len] * batch_size
         return input_dict
+
+    def load_recognizer(self, rec):
+        """Pretrained recognizer in eval mode, as (model, aster_info); aster_info is None except for ASTER."""
+        if rec == 'aster':
+            aster, aster_info = self.Aster_init()
+            return aster.eval(), aster_info
+        if rec == 'moran':
+            return self.MORAN_init().eval(), None
+        if rec == 'crnn':
+            return self.CRNN_init().eval(), None
+        raise ValueError('unknown recognizer: %s' % rec)
+
+    def recognize(self, rec, recognizer, images, aster_info=None):
+        """Predicted strings for the RGB channels of `images` (B x C x H x W, values in [0, 1])."""
+        images = images[:, :3, :, :]
+        if rec == 'aster':
+            aster_dict = self.parse_aster_data(images)
+            pred_rec = recognizer(aster_dict)['output']['pred_rec']
+            pred_str, _ = get_str_list(pred_rec, aster_dict['rec_targets'], dataset=aster_info)
+            return pred_str
+        if rec == 'moran':
+            moran_input = self.parse_moran_data(images)
+            preds, _ = recognizer(*moran_input, test=True)
+            _, preds = preds.max(1)
+            sim_preds = self.converter_moran.decode(preds.data, moran_input[1].data)
+            return [pred.split('$')[0] for pred in sim_preds]
+        if rec == 'crnn':
+            crnn_output = recognizer(self.parse_crnn_data(images))
+            _, preds = crnn_output.max(2)
+            preds = preds.transpose(1, 0).contiguous().view(-1)
+            preds_size = torch.IntTensor([crnn_output.size(0)] * images.shape[0])
+            pred_str = self.converter_crnn.decode(preds.data, preds_size.data, raw=False)
+            # The CRNN decoder returns a bare string instead of a list for a batch of one image.
+            return [pred_str] if isinstance(pred_str, str) else pred_str
+        raise ValueError('unknown recognizer: %s' % rec)
 
 
 class AsterInfo(object):

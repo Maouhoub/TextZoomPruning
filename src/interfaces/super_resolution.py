@@ -178,16 +178,7 @@ class TextSR(base.TextBase):
         test_data, test_loader = self.get_test_data(self.test_data_dir)
         data_name = self.args.test_data_dir.split('/')[-1]
         print('evaling %s' % data_name)
-        if self.args.rec == 'moran':
-            moran = self.MORAN_init()
-            moran.eval()
-        elif self.args.rec == 'aster':
-            aster, aster_info = self.Aster_init()
-            aster.eval()
-        elif self.args.rec == 'crnn':
-            crnn = self.CRNN_init()
-            crnn.eval()
-        # print(sum(p.numel() for p in moran.parameters()))
+        recognizer, aster_info = self.load_recognizer(self.args.rec)
         if self.args.arch != 'bicubic':
             for p in model.parameters():
                 p.requires_grad = False
@@ -212,30 +203,7 @@ class TextSR(base.TextBase):
             metric_dict['psnr'].append(self.cal_psnr(images_sr, images_hr))
             metric_dict['ssim'].append(self.cal_ssim(images_sr, images_hr))
 
-            if self.args.rec == 'moran':
-                moran_input = self.parse_moran_data(images_sr[:, :3, :, :])
-                moran_output = moran(moran_input[0], moran_input[1], moran_input[2], moran_input[3], test=True)
-                preds, preds_reverse = moran_output
-                _, preds = preds.max(1)
-                sim_preds = self.converter_moran.decode(preds.data, moran_input[1].data)
-                pred_str_sr = [pred.split('$')[0] for pred in sim_preds]
-            elif self.args.rec == 'aster':
-                aster_dict_sr = self.parse_aster_data(images_sr[:, :3, :, :])
-                aster_output_sr = aster(aster_dict_sr)
-                pred_rec_sr = aster_output_sr['output']['pred_rec']
-                pred_str_sr, _ = get_str_list(pred_rec_sr, aster_dict_sr['rec_targets'], dataset=aster_info)
-
-                aster_dict_lr = self.parse_aster_data(images_lr[:, :3, :, :])
-                aster_output_lr = aster(aster_dict_lr)
-                pred_rec_lr = aster_output_lr['output']['pred_rec']
-                pred_str_lr, _ = get_str_list(pred_rec_lr, aster_dict_lr['rec_targets'], dataset=aster_info)
-            elif self.args.rec == 'crnn':
-                crnn_input = self.parse_crnn_data(images_sr[:, :3, :, :])
-                crnn_output = crnn(crnn_input)
-                _, preds = crnn_output.max(2)
-                preds = preds.transpose(1, 0).contiguous().view(-1)
-                preds_size = torch.IntTensor([crnn_output.size(0)] * val_batch_size)
-                pred_str_sr = self.converter_crnn.decode(preds.data, preds_size.data, raw=False)
+            pred_str_sr = self.recognize(self.args.rec, recognizer, images_sr, aster_info)
             for pred, target in zip(pred_str_sr, label_strs):
                 if str_filt(pred, 'lower') == str_filt(target, 'lower'):
                     n_correct += 1
@@ -244,7 +212,6 @@ class TextSR(base.TextBase):
             print('Evaluation: [{}][{}/{}]\t'
                   .format(datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
                           i + 1, len(test_loader), ))
-            # self.test_display(images_lr, images_sr, images_hr, pred_str_lr, pred_str_sr, label_strs, str_filt)
         time_end = time.time()
         psnr_avg = sum(metric_dict['psnr']) / len(metric_dict['psnr'])
         ssim_avg = sum(metric_dict['ssim']) / len(metric_dict['ssim'])

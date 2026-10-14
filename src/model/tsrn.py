@@ -57,11 +57,18 @@ class TSRN(nn.Module):
                 activation='none')
 
     def forward(self, x):
-        # embed()
+        return self.reconstruct(self.align(x))
+
+    def align(self, x):
+        """Central alignment (STN + TPS). It only runs during training, as in the original model."""
         if self.stn and self.training:
             x = F.interpolate(x, self.tps_inputsize, mode='bilinear', align_corners=True)
             _, ctrl_points_x = self.stn_head(x)
             x, _ = self.tps(x, ctrl_points_x)
+        return x
+
+    def reconstruct(self, x):
+        """Super-resolve an (already aligned) LR image."""
         block = {'1': self.block1(x)}
         for i in range(self.srb_nums + 1):
             block[str(i + 2)] = getattr(self, 'block%d' % (i + 2))(block[str(i + 1)])
