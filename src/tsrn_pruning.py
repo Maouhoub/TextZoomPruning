@@ -110,19 +110,62 @@ def remove_units(group, units):
     tp.prune_conv_in_channels(group.consumer, units)
 
 
-def prune(model, ratio, criterion, round_to=4):
-    """Remove `ratio` of the units of every prunable group, least important first.
+def prune_to(model, targets, criterion):
+    """Keep `targets[name]` units in every prunable group, removing the least important first.
 
-    The same ratio is applied to every group. Returns {group name: (units before, units after)}.
+    Returns {group name: (units before, units after)}.
     """
     report = {}
     for group in prunable_groups(model):
         before = group.units
-        scores = unit_importance(group, criterion)
-        remove_units(group, torch.argsort(scores)[:units_to_remove(before, ratio, round_to)].tolist())
+        count = before - targets[group.name]
+        if count < 0:
+            raise ValueError(f'{group.name}: cannot grow from {before} to {targets[group.name]} units')
+        if count > 0:
+            scores = unit_importance(group, criterion)
+            remove_units(group, torch.argsort(scores)[:count].tolist())
         report[group.name] = (before, group.units)
     model.zero_grad(set_to_none=True)
     return report
+
+
+def prune(model, ratio, criterion, round_to=4):
+    """Remove `ratio` of the units of every prunable group (same ratio for all), least important first."""
+    targets = {g.name: g.units - units_to_remove(g.units, ratio, round_to) for g in prunable_groups(model)}
+    return prune_to(model, targets, criterion)
+
+
+def keep_schedule(units, target_ratio, steps, schedule, round_to):
+    """Units to keep after each of `steps` pruning steps, ending at `target_ratio` removed.
+
+    linear: the same amount removed at every step. cubic: large steps first, as in Chapter 1
+    (Torch-Pruning's CubicScheduler). Counts are multiples of `round_to`, never below it.
+    """
+    kept = []
+    for step in range(1, steps + 1):
+        progress = step / steps
+        if schedule == 'linear':
+            ratio = target_ratio * progress
+        elif schedule == 'cubic':
+            ratio = target_ratio * (1 - (1 - progress) ** 3)
+        else:
+            raise ValueError(f'unknown schedule: {schedule}')
+        kept.append(max(round_to, units - round(units * ratio / round_to) * round_to))
+    if any(later >= earlier for earlier, later in zip([units] + kept, kept)):
+        raise ValueError(f'schedule {kept} has steps that remove nothing; use fewer steps or a smaller round_to')
+    return kept
+
+
+def compact_gru_weights(model):
+    """Re-pack GRU weights into one memory block for cuDNN.
+
+    Copying a model (deepcopy, .to()) splits them, and cuDNN then re-packs them on every call,
+    which slows the GRUs and distorts latency measurements.
+    """
+    for module in model.modules():
+        if isinstance(module, nn.RNNBase):
+            module.flatten_parameters()
+    return model
 
 
 def channel_sizes(model):
