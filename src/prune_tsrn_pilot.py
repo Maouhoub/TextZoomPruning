@@ -40,6 +40,7 @@ def parse_args():
     parser.add_argument('--batch_size', type=int, default=128, help='training batch size')
     parser.add_argument('--eval_batch_size', type=int, default=256, help='MORAN supports at most 256')
     parser.add_argument('--val_fraction', type=float, default=0.05)
+    parser.add_argument('--split_seed', type=int, default=0, help='seed of the train/validation split')
     parser.add_argument('--seed', type=int, default=0)
     parser.add_argument('--skip_test', action='store_true', help='only evaluate on the validation split')
     return parser.parse_args()

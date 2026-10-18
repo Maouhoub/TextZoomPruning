@@ -6,6 +6,7 @@ import platform
 import random
 import statistics
 import subprocess
+import time
 from importlib import metadata
 from types import SimpleNamespace
 
@@ -16,7 +17,7 @@ import torch.nn.functional as F
 import torch.optim as optim
 import yaml
 from easydict import EasyDict
-from torch.utils.data import DataLoader, Subset
+from torch.utils.data import DataLoader, RandomSampler, Subset
 
 import tsrn_pruning
 from dataset.dataset import ConcatDataset, alignCollate_real, lmdbDataset_real
@@ -103,25 +104,52 @@ def frozen_copy(model):
     return tsrn_pruning.compact_gru_weights(teacher)
 
 
+def checkpoint_info(checkpoint):
+    return torch.load(checkpoint, map_location='cpu', weights_only=True).get('info', {})
+
+
+def baseline_name(checkpoint):
+    """Short name of an unpruned TSRN: the one stored by train_tsrn_baseline.py, else the file name
+    without 'tsrn_' (the community checkpoint is 'community')."""
+    stem = os.path.splitext(os.path.basename(checkpoint))[0]
+    return checkpoint_info(checkpoint).get('name') or stem.removeprefix('tsrn_')
+
+
+def check_baseline_split(checkpoint, val_indices, log=print):
+    """Refuse a baseline trained on another split: its training images would include our validation images."""
+    split = checkpoint_info(checkpoint).get('val_split')
+    if split is None:
+        log('WARNING: the unpruned checkpoint does not record its training split, so its training data may '
+            'include the validation images (true for the community checkpoint)')
+    elif split['val_indices'] != val_indices:
+        raise SystemExit(f'{checkpoint} was trained with another validation split; '
+                         'use the same --val_fraction and --split_seed as its training')
+
+
 # ---------------------------------------------------------------- data
 
-def make_loader(data, batch_size, cfg, shuffle):
+def make_loader(data, batch_size, cfg, shuffle, generator=None, persistent=False):
+    """With `generator`, only that generator drives the shuffling, so reseeding it fixes the batch
+    order. `persistent` keeps the loading processes alive between epochs."""
     collate = alignCollate_real(imgH=cfg.height, imgW=cfg.width, down_sample_scale=cfg.down_sample_scale, mask=True)
-    return DataLoader(data, batch_size=batch_size, shuffle=shuffle, num_workers=int(cfg.workers),
-                      collate_fn=collate, drop_last=shuffle)
+    workers = int(cfg.workers)
+    sampler = RandomSampler(data, generator=generator) if shuffle else None  # same as shuffle=True
+    return DataLoader(data, batch_size=batch_size, sampler=sampler, num_workers=workers,
+                      collate_fn=collate, drop_last=shuffle, persistent_workers=persistent and workers > 0)
 
 
 def load_data(cfg, args, split_path, with_test):
     """Train/validation split of the TextZoom training set, and the three test splits.
 
-    The split is written to `split_path` the first time and checked against it afterwards, so a
-    resumed run can never silently use a different validation set.
+    The split depends only on `args.split_seed` (not on the run seed), so every run and the clean
+    baseline share the same validation images. It is written to `split_path` the first time and
+    checked against it afterwards, so a resumed run can never silently use a different validation set.
     """
     train_full = ConcatDataset([lmdbDataset_real(root=d, voc_type=cfg.voc_type, max_len=cfg.max_len)
                                 for d in cfg.train_data_dir])
-    train_idx, val_idx = tsrn_pruning.split_indices(len(train_full), args.val_fraction, args.seed)
+    train_idx, val_idx = tsrn_pruning.split_indices(len(train_full), args.val_fraction, args.split_seed)
     split = {'train_data': [os.path.basename(os.path.normpath(d)) for d in cfg.train_data_dir],
-             'n_total': len(train_full), 'val_fraction': args.val_fraction, 'seed': args.seed,
+             'n_total': len(train_full), 'val_fraction': args.val_fraction, 'seed': args.split_seed,
              'val_indices': val_idx}
     if os.path.exists(split_path):
         saved = read_json(split_path)
@@ -139,7 +167,7 @@ def load_data(cfg, args, split_path, with_test):
                 for name in SPLIT_ORDER}
     return SimpleNamespace(train=make_loader(Subset(train_full, train_idx), args.batch_size, cfg, shuffle=True),
                            val=make_loader(Subset(train_full, val_idx), args.eval_batch_size, cfg, shuffle=False),
-                           test=test, n_train=len(train_idx), n_val=len(val_idx))
+                           test=test, n_train=len(train_idx), n_val=len(val_idx), val_indices=val_idx)
 
 
 # ---------------------------------------------------------------- measurements
@@ -261,6 +289,28 @@ def write_json(path, data):
 def read_json(path):
     with open(path) as f:
         return json.load(f)
+
+
+def start_or_resume_config(run_dir, args, parser, free_args, log=print):
+    """Write config.json for a new run; for an existing run, refuse settings that would change results.
+
+    Only the arguments in `free_args` may differ between sessions. A setting missing from an older
+    config.json is compared with its default, which is the behaviour that run had before the
+    setting existed.
+    """
+    path = os.path.join(run_dir, 'config.json')
+    current = vars(args)
+    if not os.path.exists(path):
+        write_json(path, {'args': current, 'environment': environment_info(),
+                          'started': time.strftime('%Y-%m-%d %H:%M:%S')})
+        return
+    saved = read_json(path)['args']
+    changed = {k: (saved.get(k, parser.get_default(k)), v) for k, v in current.items()
+               if k not in free_args and saved.get(k, parser.get_default(k)) != v}
+    if changed:
+        raise SystemExit(f'{run_dir} was started with different settings {changed}; '
+                         'use the original settings or a new --run_name')
+    log(f'resuming run in {run_dir}')
 
 
 def save_atomic(obj, path):

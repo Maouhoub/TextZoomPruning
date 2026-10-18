@@ -5,9 +5,10 @@ when the run was resumed. For the paper, all models are timed here in the same s
 models are timed in `--rounds` interleaved rounds and the median per model is kept, so slow
 drift of the machine affects every model alike.
 
-    python measure_trajectory_latency.py --run_dir <run folder> --resume <unpruned TSRN checkpoint>
+    python measure_trajectory_latency.py --run_dir <run folder>
 
-Writes latency_same_session.csv in the run folder.
+Step 0 is the unpruned checkpoint the run was started from (config.json), unless `--resume` says
+otherwise. Writes latency_same_session.csv in the run folder.
 """
 import argparse
 import csv
@@ -22,7 +23,8 @@ import tsrn_experiment as exp
 def parse_args():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('--run_dir', required=True)
-    parser.add_argument('--resume', required=True, help='unpruned TSRN checkpoint (step 0)')
+    parser.add_argument('--resume', default=None,
+                        help='unpruned TSRN checkpoint (step 0); default: the one in the run config.json')
     parser.add_argument('--rounds', type=int, default=3)
     parser.add_argument('--gpu_repeats', type=int, default=100)
     parser.add_argument('--cpu_repeats', type=int, default=30)
@@ -33,7 +35,9 @@ def main():
     args = parse_args()
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     records = exp.read_json(os.path.join(args.run_dir, 'trajectory.json'))
-    models = {r['step']: (exp.load_tsrn(args.resume, device) if r['checkpoint'] is None
+    unpruned = args.resume or exp.read_json(os.path.join(args.run_dir, 'config.json'))['args']['resume']
+    print(f'step 0: {unpruned}')
+    models = {r['step']: (exp.load_tsrn(unpruned, device) if r['checkpoint'] is None
                           else exp.load_pruned(os.path.join(args.run_dir, r['checkpoint']), device))
               for r in records}
 

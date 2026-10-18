@@ -71,36 +71,20 @@ def build_parser():
     parser.add_argument('--batch_size', type=int, default=128, help='training batch size')
     parser.add_argument('--eval_batch_size', type=int, default=256, help='MORAN supports at most 256')
     parser.add_argument('--val_fraction', type=float, default=0.05)
-    parser.add_argument('--seed', type=int, default=0)
+    parser.add_argument('--split_seed', type=int, default=0,
+                        help='seed of the train/validation split; keep it equal to the clean baseline training')
+    parser.add_argument('--seed', type=int, default=0, help='seed of the pruning and fine-tuning')
     parser.add_argument('--test_every', type=int, default=1, help='test-set evaluation every N steps (and last)')
     return parser
 
 
 def default_run_name(args):
+    # Runs from the community checkpoint keep their original names; other baselines are named first.
+    baseline = exp.baseline_name(args.resume)
+    model = 'tsrn' if baseline == 'community' else f'tsrn-{baseline}'
     fine_tuning = f'ft{args.epochs}ep' + (f'-es{args.patience}' if args.patience else '')
-    return (f'tsrn_conv-only_{args.importance}_{args.schedule}-{args.steps}steps-to{round(args.target_ratio * 100)}pct'
+    return (f'{model}_conv-only_{args.importance}_{args.schedule}-{args.steps}steps-to{round(args.target_ratio * 100)}pct'
             f'_round{args.round_to}_{fine_tuning}_kd{args.kd_weight:g}_select-{args.select_by}_seed{args.seed}')
-
-
-def start_or_resume_config(run_dir, args, parser, log):
-    """Write config.json for a new run; for an existing run, refuse settings that would change results.
-
-    A setting missing from an older config.json is compared with its default, which is the
-    behaviour that run had before the setting existed.
-    """
-    path = os.path.join(run_dir, 'config.json')
-    current = vars(args)
-    if not os.path.exists(path):
-        exp.write_json(path, {'args': current, 'environment': exp.environment_info(),
-                              'started': time.strftime('%Y-%m-%d %H:%M:%S')})
-        return
-    saved = exp.read_json(path)['args']
-    changed = {k: (saved.get(k, parser.get_default(k)), v) for k, v in current.items()
-               if k not in RESUME_FREE_ARGS and saved.get(k, parser.get_default(k)) != v}
-    if changed:
-        raise SystemExit(f'{run_dir} was started with different settings {changed}; '
-                         'use the original settings or a new --run_name')
-    log(f'resuming run in {run_dir}')
 
 
 def removed_pct(sizes, initial):
@@ -166,7 +150,7 @@ def main():
     os.makedirs(os.path.join(run_dir, 'figures'), exist_ok=True)
     log = exp.RunLog(os.path.join(run_dir, 'run.log'))
     log(f"===== session started {time.strftime('%Y-%m-%d %H:%M:%S')} on {exp.gpu_name()}")
-    start_or_resume_config(run_dir, args, parser, log)
+    exp.start_or_resume_config(run_dir, args, parser, RESUME_FREE_ARGS, log)
     readme = os.path.join(run_dir, 'README.md')
     if not os.path.exists(readme):
         with open(readme, 'w') as f:
@@ -177,6 +161,7 @@ def main():
     textbase = exp.make_textbase(config, args.eval_batch_size)
     data = exp.load_data(config.TRAIN, args, os.path.join(run_dir, 'val_split.json'), with_test=True)
     log(f'split: {data.n_train} train / {data.n_val} validation images')
+    exp.check_baseline_split(args.resume, data.val_indices, log)
     recognizers = {rec: textbase.load_recognizer(rec) for rec in exp.RECOGNIZERS}
     val_recognizers = {'crnn': recognizers['crnn']}
 
