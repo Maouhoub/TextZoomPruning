@@ -201,12 +201,15 @@ def describe(model, device):
 def fine_tune(student, teacher, train_loader, val_loader, textbase, val_recognizers, args, device, log=print):
     """Train with the original TSRN loss plus output distillation; keep the best epoch on validation.
 
-    Teacher and student see the same STN-aligned input, so the distillation target matches.
-    Returns (history, best epoch).
+    Runs at most `args.epochs` epochs. With `args.patience` > 0 it stops early once the validation
+    metric (`args.select_by`) has not improved by more than `args.min_delta` for `patience` epochs,
+    as in Chapter 1. Teacher and student see the same STN-aligned input, so the distillation target
+    matches. Returns (history, best epoch).
     """
     criterion = ImageLoss(gradient=True, loss_weight=[1, 1e-4]).to(device)
     optimizer = optim.Adam(student.parameters(), lr=args.lr, betas=(0.5, 0.999))
     best_score, best_state, best_epoch, history = -float('inf'), None, None, []
+    epochs_without_gain = 0
     for epoch in range(1, args.epochs + 1):
         student.train()
         losses = []
@@ -231,8 +234,15 @@ def fine_tune(student, teacher, train_loader, val_loader, textbase, val_recogniz
         history.append({'epoch': epoch, 'loss': statistics.mean(losses), 'val': val})
         log(f"  epoch {epoch}: loss {statistics.mean(losses):.4f} | val CRNN {val['accuracy']['crnn']:.2f}% "
             f"PSNR {val['psnr']:.2f}")
-        if score > best_score:
+        if score > best_score + args.min_delta:
             best_score, best_state, best_epoch = score, copy.deepcopy(student.state_dict()), epoch
+            epochs_without_gain = 0
+        else:
+            epochs_without_gain += 1
+            if args.patience and epochs_without_gain >= args.patience:
+                log(f'  early stop: no {args.select_by} gain above {args.min_delta:g} for {args.patience} epochs; '
+                    f'keeping epoch {best_epoch}')
+                break
     student.load_state_dict(best_state)
     tsrn_pruning.compact_gru_weights(student)
     return history, best_epoch

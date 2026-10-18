@@ -28,7 +28,11 @@ def parse_args():
     parser.add_argument('--round_to', type=int, default=4, help='channels are removed in multiples of this')
     parser.add_argument('--importance', default='taylor', choices=['taylor', 'magnitude'])
     parser.add_argument('--taylor_batches', type=int, default=2)
-    parser.add_argument('--epochs', type=int, default=3)
+    parser.add_argument('--epochs', type=int, default=3, help='maximum fine-tuning epochs')
+    parser.add_argument('--patience', type=int, default=0,
+                        help='stop fine-tuning after this many epochs without validation gain (0 = never)')
+    parser.add_argument('--min_delta', type=float, default=0.0,
+                        help='smallest validation gain that counts (dB for psnr, points for ocr)')
     parser.add_argument('--lr', type=float, default=1e-4)
     parser.add_argument('--kd_weight', type=float, default=0.1)
     parser.add_argument('--select_by', default='psnr', choices=['psnr', 'ocr'],

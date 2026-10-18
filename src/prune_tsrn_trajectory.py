@@ -46,7 +46,7 @@ sessions; use `latency_same_session.csv` for the paper.
 """
 
 
-def parse_args():
+def build_parser():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('--resume', required=True, help='unpruned TSRN checkpoint, also the distillation teacher')
     parser.add_argument('--experiments_dir', required=True, help='root folder for all experiment results')
@@ -59,7 +59,11 @@ def parse_args():
     parser.add_argument('--round_to', type=int, default=8, help='channel counts stay multiples of this')
     parser.add_argument('--importance', default='taylor', choices=['taylor', 'magnitude'])
     parser.add_argument('--taylor_batches', type=int, default=2)
-    parser.add_argument('--epochs', type=int, default=3, help='fine-tuning epochs after each step')
+    parser.add_argument('--epochs', type=int, default=3, help='maximum fine-tuning epochs after each step')
+    parser.add_argument('--patience', type=int, default=0,
+                        help='stop fine-tuning after this many epochs without validation gain (0 = never)')
+    parser.add_argument('--min_delta', type=float, default=0.0,
+                        help='smallest validation gain that counts (dB for psnr, points for ocr)')
     parser.add_argument('--lr', type=float, default=1e-4)
     parser.add_argument('--kd_weight', type=float, default=0.1)
     parser.add_argument('--select_by', default='psnr', choices=['psnr', 'ocr'],
@@ -69,16 +73,21 @@ def parse_args():
     parser.add_argument('--val_fraction', type=float, default=0.05)
     parser.add_argument('--seed', type=int, default=0)
     parser.add_argument('--test_every', type=int, default=1, help='test-set evaluation every N steps (and last)')
-    return parser.parse_args()
+    return parser
 
 
 def default_run_name(args):
+    fine_tuning = f'ft{args.epochs}ep' + (f'-es{args.patience}' if args.patience else '')
     return (f'tsrn_conv-only_{args.importance}_{args.schedule}-{args.steps}steps-to{round(args.target_ratio * 100)}pct'
-            f'_round{args.round_to}_ft{args.epochs}ep_kd{args.kd_weight:g}_select-{args.select_by}_seed{args.seed}')
+            f'_round{args.round_to}_{fine_tuning}_kd{args.kd_weight:g}_select-{args.select_by}_seed{args.seed}')
 
 
-def start_or_resume_config(run_dir, args, log):
-    """Write config.json for a new run; for an existing run, refuse settings that would change results."""
+def start_or_resume_config(run_dir, args, parser, log):
+    """Write config.json for a new run; for an existing run, refuse settings that would change results.
+
+    A setting missing from an older config.json is compared with its default, which is the
+    behaviour that run had before the setting existed.
+    """
     path = os.path.join(run_dir, 'config.json')
     current = vars(args)
     if not os.path.exists(path):
@@ -86,7 +95,8 @@ def start_or_resume_config(run_dir, args, log):
                               'started': time.strftime('%Y-%m-%d %H:%M:%S')})
         return
     saved = exp.read_json(path)['args']
-    changed = {k: (saved.get(k), v) for k, v in current.items() if k not in RESUME_FREE_ARGS and saved.get(k) != v}
+    changed = {k: (saved.get(k, parser.get_default(k)), v) for k, v in current.items()
+               if k not in RESUME_FREE_ARGS and saved.get(k, parser.get_default(k)) != v}
     if changed:
         raise SystemExit(f'{run_dir} was started with different settings {changed}; '
                          'use the original settings or a new --run_name')
@@ -108,6 +118,7 @@ def csv_row(record):
     row['val_psnr_before_finetune'] = before['psnr'] if before else ''
     row['val_crnn_before_finetune'] = before['accuracy']['crnn'] if before else ''
     row['best_epoch'] = record.get('best_epoch') or ''
+    row['epochs_run'] = len(record.get('fine_tune') or []) or ''
     test = record.get('test')
     for rec in exp.RECOGNIZERS:
         for split in exp.SPLIT_ORDER + ('average',):
@@ -144,7 +155,8 @@ def step_summary(record):
 
 
 def main():
-    args = parse_args()
+    parser = build_parser()
+    args = parser.parse_args()
     run_name = args.run_name or default_run_name(args)
     run_dir = os.path.join(args.experiments_dir, EXPERIMENT, run_name)
     if args.print_run_dir:
@@ -154,7 +166,7 @@ def main():
     os.makedirs(os.path.join(run_dir, 'figures'), exist_ok=True)
     log = exp.RunLog(os.path.join(run_dir, 'run.log'))
     log(f"===== session started {time.strftime('%Y-%m-%d %H:%M:%S')} on {exp.gpu_name()}")
-    start_or_resume_config(run_dir, args, log)
+    start_or_resume_config(run_dir, args, parser, log)
     readme = os.path.join(run_dir, 'README.md')
     if not os.path.exists(readme):
         with open(readme, 'w') as f:
