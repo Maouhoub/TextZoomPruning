@@ -173,23 +173,31 @@ def load_data(cfg, args, split_path, with_test):
 # ---------------------------------------------------------------- measurements
 
 @torch.no_grad()
-def evaluate(model, loader, textbase, recognizers, device):
-    """Accuracy (%) per recognizer, plus PSNR/SSIM with the TextZoom protocol (per batch, then averaged)."""
+def predict(model, loader, textbase, recognizers, device):
+    """What every recognizer reads on every image (lower case, as compared with the labels), the
+    labels, and PSNR/SSIM with the TextZoom protocol (per batch, then averaged)."""
     model.eval()
-    correct = dict.fromkeys(recognizers, 0)
-    psnr, ssim, total = [], [], 0
-    for images_hr, images_lr, labels in loader:
+    predictions = {name: [] for name in recognizers}
+    labels, psnr, ssim = [], [], []
+    for images_hr, images_lr, batch_labels in loader:
         images_sr = model(images_lr.to(device))
         images_hr = images_hr.to(device)
         psnr.append(textbase.cal_psnr(images_sr, images_hr).item())
         ssim.append(textbase.cal_ssim(images_sr, images_hr).item())
-        targets = [str_filt(label, 'lower') for label in labels]
+        labels += [str_filt(label, 'lower') for label in batch_labels]
         for name, (recognizer, aster_info) in recognizers.items():
-            predictions = textbase.recognize(name, recognizer, images_sr, aster_info)
-            correct[name] += sum(str_filt(p, 'lower') == t for p, t in zip(predictions, targets))
-        total += len(labels)
-    return {'accuracy': {name: 100.0 * c / total for name, c in correct.items()},
-            'psnr': statistics.mean(psnr), 'ssim': statistics.mean(ssim), 'images': total}
+            predictions[name] += [str_filt(p, 'lower')
+                                  for p in textbase.recognize(name, recognizer, images_sr, aster_info)]
+    return {'predictions': predictions, 'labels': labels, 'psnr': statistics.mean(psnr), 'ssim': statistics.mean(ssim)}
+
+
+def evaluate(model, loader, textbase, recognizers, device):
+    """Accuracy (%) per recognizer, plus PSNR/SSIM with the TextZoom protocol (per batch, then averaged)."""
+    result = predict(model, loader, textbase, recognizers, device)
+    labels = result['labels']
+    return {'accuracy': {name: 100.0 * sum(p == t for p, t in zip(read, labels)) / len(labels)
+                         for name, read in result['predictions'].items()},
+            'psnr': result['psnr'], 'ssim': result['ssim'], 'images': len(labels)}
 
 
 def evaluate_test(model, test_loaders, textbase, recognizers, device):
