@@ -23,6 +23,7 @@ import tsrn_pruning
 from dataset.dataset import ConcatDataset, alignCollate_real, lmdbDataset_real
 from interfaces.base import TextBase
 from loss.image_loss import ImageLoss
+from loss.recognition_loss import CRNNRecognitionLoss
 from model.tsrn import TSRN
 from profile_tsrn import median_latency_ms
 from utils.util import str_filt
@@ -191,20 +192,28 @@ def predict(model, loader, textbase, recognizers, device):
     return {'predictions': predictions, 'labels': labels, 'psnr': statistics.mean(psnr), 'ssim': statistics.mean(ssim)}
 
 
-def evaluate(model, loader, textbase, recognizers, device):
-    """Accuracy (%) per recognizer, plus PSNR/SSIM with the TextZoom protocol (per batch, then averaged)."""
-    result = predict(model, loader, textbase, recognizers, device)
+def summarize(result):
+    """Accuracy (%) per recognizer and PSNR/SSIM from the output of `predict`."""
     labels = result['labels']
     return {'accuracy': {name: 100.0 * sum(p == t for p, t in zip(read, labels)) / len(labels)
                          for name, read in result['predictions'].items()},
             'psnr': result['psnr'], 'ssim': result['ssim'], 'images': len(labels)}
 
 
-def evaluate_test(model, test_loaders, textbase, recognizers, device):
-    results = {name: evaluate(model, loader, textbase, recognizers, device) for name, loader in test_loaders.items()}
+def evaluate(model, loader, textbase, recognizers, device):
+    """Accuracy (%) per recognizer, plus PSNR/SSIM with the TextZoom protocol (per batch, then averaged)."""
+    return summarize(predict(model, loader, textbase, recognizers, device))
+
+
+def evaluate_test(model, test_loaders, textbase, recognizers, device, keep_predictions=False):
+    """Per split and weighted average; with `keep_predictions`, also what every reader read on every image."""
+    predicted = {name: predict(model, loader, textbase, recognizers, device) for name, loader in test_loaders.items()}
+    results = {name: summarize(p) for name, p in predicted.items()}
     images = sum(r['images'] for r in results.values())
     results['average'] = {'accuracy': {rec: sum(r['accuracy'][rec] * r['images'] for r in results.values()) / images
                                        for rec in recognizers}}
+    if keep_predictions:
+        results['predictions'] = {name: {'labels': p['labels'], 'read': p['predictions']} for name, p in predicted.items()}
     return results
 
 
@@ -232,24 +241,47 @@ def describe(model, device):
             'gpu': gpu_name()}
 
 
+# ---------------------------------------------------------------- objectives
+
+def make_recognition_loss(textbase):
+    """CTC loss of its own frozen CRNN (separate from the CRNN used for evaluation)."""
+    crnn, _ = textbase.load_recognizer('crnn')
+    return CRNNRecognitionLoss(crnn, textbase.converter_crnn)
+
+
+def scoring_loss(image_criterion, recognition=None, rec_weight=0.0):
+    """Loss whose gradients give the Taylor importance: the image loss, plus the reading loss if weighted.
+
+    With rec_weight 0 it is exactly the image loss used before. Otherwise both terms use the
+    fine-tuning scale: 100 × image loss + rec_weight × CTC loss.
+    """
+    if rec_weight == 0:
+        return lambda images_sr, images_hr, labels: image_criterion(images_sr, images_hr)
+    return lambda images_sr, images_hr, labels: (100 * image_criterion(images_sr, images_hr)
+                                                 + rec_weight * recognition(images_sr, labels))
+
+
 # ---------------------------------------------------------------- fine-tuning
 
-def fine_tune(student, teacher, train_loader, val_loader, textbase, val_recognizers, args, device, log=print):
+def fine_tune(student, teacher, train_loader, val_loader, textbase, val_recognizers, args, device, log=print,
+              recognition=None):
     """Train with the original TSRN loss plus output distillation; keep the best epoch on validation.
 
     Runs at most `args.epochs` epochs. With `args.patience` > 0 it stops early once the validation
     metric (`args.select_by`) has not improved by more than `args.min_delta` for `patience` epochs,
     as in Chapter 1. Teacher and student see the same STN-aligned input, so the distillation target
-    matches. Returns (history, best epoch).
+    matches. With `args.ft_rec_weight` > 0, the CTC loss of a frozen CRNN reading the output
+    (`recognition`) is added with that weight. Returns (history, best epoch).
     """
     criterion = ImageLoss(gradient=True, loss_weight=[1, 1e-4]).to(device)
+    rec_weight = getattr(args, 'ft_rec_weight', 0.0)
     optimizer = optim.Adam(student.parameters(), lr=args.lr, betas=(0.5, 0.999))
     best_score, best_state, best_epoch, history = -float('inf'), None, None, []
     epochs_without_gain = 0
     for epoch in range(1, args.epochs + 1):
         student.train()
         losses = []
-        for images_hr, images_lr, _ in train_loader:
+        for images_hr, images_lr, labels in train_loader:
             images_lr, images_hr = images_lr.to(device), images_hr.to(device)
             aligned = student.align(images_lr)
             images_sr = student.reconstruct(aligned)
@@ -259,6 +291,8 @@ def fine_tune(student, teacher, train_loader, val_loader, textbase, val_recogniz
                     target = teacher.reconstruct(aligned.detach())
                 loss = loss + args.kd_weight * F.mse_loss(images_sr, target)
             loss = loss * 100  # same scaling as the original TSRN training loop
+            if rec_weight > 0:
+                loss = loss + rec_weight * recognition(images_sr, labels)
             optimizer.zero_grad()
             loss.backward()
             nn.utils.clip_grad_norm_(student.parameters(), 0.25)

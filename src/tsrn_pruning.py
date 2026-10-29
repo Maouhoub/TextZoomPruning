@@ -179,14 +179,14 @@ def shrink_to(model, sizes):
     return model
 
 
-def accumulate_gradients(model, loader, criterion, batches, device):
-    """Gradients of the training loss over `batches` batches, for Taylor importance."""
+def accumulate_gradients(model, loader, loss_fn, batches, device):
+    """Gradients of `loss_fn(sr, hr, labels)` over `batches` batches, for Taylor importance."""
     model.train()
     model.zero_grad(set_to_none=True)
-    for i, (images_hr, images_lr, _) in enumerate(loader):
+    for i, (images_hr, images_lr, labels) in enumerate(loader):
         if i == batches:
             break
-        loss = criterion(model(images_lr.to(device)), images_hr.to(device)) / batches
+        loss = loss_fn(model(images_lr.to(device)), images_hr.to(device), labels) / batches
         loss.backward()
 
 

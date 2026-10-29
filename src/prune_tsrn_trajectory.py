@@ -59,6 +59,10 @@ def build_parser():
     parser.add_argument('--round_to', type=int, default=8, help='channel counts stay multiples of this')
     parser.add_argument('--importance', default='taylor', choices=['taylor', 'magnitude'])
     parser.add_argument('--taylor_batches', type=int, default=2)
+    parser.add_argument('--score_rec_weight', type=float, default=0.0,
+                        help='weight of the CRNN reading (CTC) loss in the Taylor scores (0 = image loss only)')
+    parser.add_argument('--ft_rec_weight', type=float, default=0.0,
+                        help='weight of the CRNN reading (CTC) loss during fine-tuning (0 = image loss only)')
     parser.add_argument('--epochs', type=int, default=3, help='maximum fine-tuning epochs after each step')
     parser.add_argument('--patience', type=int, default=0,
                         help='stop fine-tuning after this many epochs without validation gain (0 = never)')
@@ -82,8 +86,12 @@ def default_run_name(args):
     # Runs from the community checkpoint keep their original names; other baselines are named first.
     baseline = exp.baseline_name(args.resume)
     model = 'tsrn' if baseline == 'community' else f'tsrn-{baseline}'
-    fine_tuning = f'ft{args.epochs}ep' + (f'-es{args.patience}' if args.patience else '')
-    return (f'{model}_conv-only_{args.importance}_{args.schedule}-{args.steps}steps-to{round(args.target_ratio * 100)}pct'
+    fine_tuning = (f'ft{args.epochs}ep' + (f'-es{args.patience}' if args.patience else '')
+                   + (f'-ctc{args.ft_rec_weight:g}' if args.ft_rec_weight else ''))
+    importance = args.importance + (f'-ctc{args.score_rec_weight:g}' if args.score_rec_weight else '')
+    if args.taylor_batches != 2:
+        importance += f'-tb{args.taylor_batches}'
+    return (f'{model}_conv-only_{importance}_{args.schedule}-{args.steps}steps-to{round(args.target_ratio * 100)}pct'
             f'_round{args.round_to}_{fine_tuning}_kd{args.kd_weight:g}_select-{args.select_by}_seed{args.seed}')
 
 
@@ -171,6 +179,8 @@ def main():
                 for name, units in initial.items()}
     log(f'channels kept per group after each step: {sorted(set(map(tuple, schedule.values())))}')
     criterion = ImageLoss(gradient=True, loss_weight=[1, 1e-4]).to(device)
+    recognition = exp.make_recognition_loss(textbase) if args.score_rec_weight or args.ft_rec_weight else None
+    score_loss = exp.scoring_loss(criterion, recognition, args.score_rec_weight)
 
     def measure(model, step):
         record = exp.describe(model, device)
@@ -208,13 +218,13 @@ def main():
         log(f'step {step}/{args.steps}: pruning to {sorted(set(targets.values()))} channels per group')
 
         if args.importance == 'taylor':
-            tsrn_pruning.accumulate_gradients(student, data.train, criterion, args.taylor_batches, device)
+            tsrn_pruning.accumulate_gradients(student, data.train, score_loss, args.taylor_batches, device)
         tsrn_pruning.prune_to(student, targets, args.importance)
         tsrn_pruning.check_structure(student, device)
         before = exp.evaluate(student, data.val, textbase, val_recognizers, device)
         log(f"  before fine-tuning: val CRNN {before['accuracy']['crnn']:.2f}% PSNR {before['psnr']:.2f}")
         history, best_epoch = exp.fine_tune(student, teacher, data.train, data.val, textbase, val_recognizers,
-                                            args, device, log=log)
+                                            args, device, log=log, recognition=recognition)
 
         record = measure(student, step)
         sizes = tsrn_pruning.channel_sizes(student)
