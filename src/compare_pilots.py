@@ -1,7 +1,8 @@
 """Compare pruning pilots: test accuracy per reader, and McNemar tests against a reference pilot.
 
 The first folder is the reference (e.g. image-loss scoring); every other pilot is compared with it
-image by image on the 4,373 test images, per reader. Pilots must prune the same baseline to the same size.
+image by image on the 4,373 test images, per reader. Pilots must start from the same baseline; they may
+end at different sizes (an uncut control is a pilot with --ratio 0).
 
     python compare_pilots.py --dirs <reference pilot> <pilot> [<pilot> ...] [--out comparison.csv]
 """
@@ -36,7 +37,7 @@ def main():
     reference_name, reference = pilots[0]
     sizes = {name: result['stages'][PRUNED]['params'] for name, result in pilots}
     if len(set(sizes.values())) > 1:
-        print(f'WARNING: the pilots have different sizes {sizes}; comparisons are not like for like')
+        print(f'note: the pilots have different sizes (params) {sizes}')
 
     unpruned = reference['stages'][BASELINE]['test']['average']['accuracy']
     print('unpruned: ' + ', '.join(f'{rec.upper()} {unpruned[rec]:.2f}' for rec in exp.RECOGNIZERS))
