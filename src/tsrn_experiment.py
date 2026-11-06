@@ -269,7 +269,8 @@ def fine_tune(student, teacher, train_loader, val_loader, textbase, val_recogniz
 
     Runs at most `args.epochs` epochs. With `args.patience` > 0 it stops early once the validation
     metric (`args.select_by`) has not improved by more than `args.min_delta` for `patience` epochs,
-    as in Chapter 1. Teacher and student see the same STN-aligned input, so the distillation target
+    as in Chapter 1. With `args.select_by` 'last' there is no selection and no early stop: every
+    epoch runs and the last one is kept. Teacher and student see the same STN-aligned input, so the distillation target
     matches. With `args.ft_rec_weight` > 0, the CTC loss of a frozen CRNN reading the output
     (`recognition`) is added with that weight. Returns (history, best epoch).
     """
@@ -300,7 +301,10 @@ def fine_tune(student, teacher, train_loader, val_loader, textbase, val_recogniz
             losses.append(loss.item())
 
         val = evaluate(student, val_loader, textbase, val_recognizers, device)
-        score = val['psnr'] if args.select_by == 'psnr' else val['accuracy']['crnn']
+        if args.select_by == 'last':
+            score = epoch  # no selection on validation: the last epoch is always kept
+        else:
+            score = val['psnr'] if args.select_by == 'psnr' else val['accuracy']['crnn']
         history.append({'epoch': epoch, 'loss': statistics.mean(losses), 'val': val})
         log(f"  epoch {epoch}: loss {statistics.mean(losses):.4f} | val CRNN {val['accuracy']['crnn']:.2f}% "
             f"PSNR {val['psnr']:.2f}")

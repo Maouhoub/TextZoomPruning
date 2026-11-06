@@ -70,7 +70,7 @@ def build_parser():
                         help='smallest validation gain that counts (dB for psnr, points for ocr)')
     parser.add_argument('--lr', type=float, default=1e-4)
     parser.add_argument('--kd_weight', type=float, default=0.1)
-    parser.add_argument('--select_by', default='psnr', choices=['psnr', 'ocr'],
+    parser.add_argument('--select_by', default='psnr', choices=['psnr', 'ocr', 'last'],
                         help='validation metric that picks the best fine-tuning epoch (ocr = CRNN accuracy)')
     parser.add_argument('--batch_size', type=int, default=128, help='training batch size')
     parser.add_argument('--eval_batch_size', type=int, default=256, help='MORAN supports at most 256')
