@@ -144,7 +144,7 @@ class GruBlock(nn.Module):
         x = x.view(b[0] * b[1], b[2], b[3])
         x, _ = self.gru(x)
         # x = self.gru(x)[0]
-        x = x.view(b[0], b[1], b[2], b[3])
+        x = x.view(b[0], b[1], b[2], -1)  # -1: 2 x hidden size, which differs from the input once the GRU is pruned
         x = x.permute(0, 3, 1, 2)
         return x
 

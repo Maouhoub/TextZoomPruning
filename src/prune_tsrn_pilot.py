@@ -1,8 +1,9 @@
 """Pruning pilot for TSRN: one pruning step on the convolutions, a short fine-tune, then measure.
 
 1. Hold out a validation split of the training set (model selection never looks at the test sets).
-2. Prune `--ratio` of the channels of every prunable convolution group (GRUs are protected).
-   Channels are scored with Taylor importance on the image loss, plus the CTC loss of a frozen
+2. Prune `--ratio` of the channels of every prunable convolution group, and `--gru_ratio` of
+   every GRU group (GRU input features, and GRU hidden units with the trunk channels tied to them;
+   0 = GRUs protected). Units are scored with Taylor importance on the image loss, plus the CTC loss of a frozen
    CRNN reading the output when `--score_rec_weight` > 0 (reading-aware pruning).
 3. Check the pruned model still outputs a valid 4 x 32 x 128 image.
 4. Fine-tune with the unpruned model as a distillation teacher (plus the CRNN reading loss when
@@ -30,7 +31,9 @@ def parse_args():
     parser.add_argument('--resume', required=True, help='trained TSRN checkpoint (state_dict_G)')
     parser.add_argument('--out_dir', required=True)
     parser.add_argument('--config', default='config/super_resolution.yaml')
-    parser.add_argument('--ratio', type=float, default=0.2, help='fraction of channels removed per group')
+    parser.add_argument('--ratio', type=float, default=0.2, help='fraction of channels removed per convolution group')
+    parser.add_argument('--gru_ratio', type=float, default=0.0,
+                        help='fraction of units removed per GRU group (0 = GRUs and trunk protected)')
     parser.add_argument('--round_to', type=int, default=4, help='channels are removed in multiples of this')
     parser.add_argument('--importance', default='taylor', choices=['taylor', 'magnitude'])
     parser.add_argument('--taylor_batches', type=int, default=2)
@@ -119,8 +122,9 @@ def main():
     if args.importance == 'taylor':
         score_loss = exp.scoring_loss(criterion, recognition, args.score_rec_weight)
         tsrn_pruning.accumulate_gradients(student, data.train, score_loss, args.taylor_batches, device)
-    report = tsrn_pruning.prune(student, args.ratio, args.importance, args.round_to)
-    print(f'2. pruned {args.ratio:.0%} per group ({args.importance}, reading-loss weight {args.score_rec_weight:g}):')
+    report = tsrn_pruning.prune(student, args.ratio, args.importance, args.round_to, gru_ratio=args.gru_ratio)
+    print(f'2. pruned {args.ratio:.0%} per convolution group and {args.gru_ratio:.0%} per GRU group '
+          f'({args.importance}, reading-loss weight {args.score_rec_weight:g}):')
     for name, (before, after) in report.items():
         print(f'     {name:16s} {before} -> {after}')
 
@@ -141,11 +145,16 @@ def main():
     print('5. measuring the pruned model...', flush=True)
     stages['pruned + fine-tune'] = measure(student, keep_predictions=True)
 
-    exp.save_pruned(student, os.path.join(args.out_dir, 'tsrn_pruned.pth'), source=args.resume, ratio=args.ratio,
+    model_path = os.path.join(args.out_dir, 'tsrn_pruned.pth')
+    exp.save_pruned(student, model_path, source=args.resume, ratio=args.ratio, gru_ratio=args.gru_ratio,
                     importance=args.importance, score_rec_weight=args.score_rec_weight,
                     ft_rec_weight=args.ft_rec_weight)
+    difference = tsrn_pruning.max_output_difference(student, exp.load_pruned(model_path, device), device)
+    print(f'6. reload check: saved model rebuilt, largest output difference {difference:.1e}')
+    if difference > 1e-4:
+        raise RuntimeError(f'{model_path} does not reload to the same model')
     exp.write_json(results_path, {'args': vars(args), 'environment': exp.environment_info(), 'pruning': report,
-                                  'channels': tsrn_pruning.channel_sizes(student), 'fine_tune': history,
+                                  'channels': tsrn_pruning.channel_sizes(student, gru=True), 'fine_tune': history,
                                   'best_epoch': best_epoch, 'stages': stages})
     print()
     print_summary(stages)

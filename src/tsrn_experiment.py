@@ -94,8 +94,8 @@ def load_pruned(checkpoint, device):
 
 
 def save_pruned(model, path, **info):
-    save_atomic({'state_dict_G': model.state_dict(), 'channels': tsrn_pruning.channel_sizes(model), 'info': info},
-                path)
+    save_atomic({'state_dict_G': model.state_dict(), 'channels': tsrn_pruning.channel_sizes(model, gru=True),
+                 'info': info}, path)
 
 
 def frozen_copy(model):
