@@ -19,7 +19,7 @@ GRU groups (kind 'gru', only with `gru=True`):
     Removing a hidden unit removes its rows in all three gates and its recurrent column.
 
 Always protected: the input of the first layer, the 4-channel output (RGB + mask), and the STN,
-which only runs during training.
+which only runs during training. Blocks and GRUs removed by depth pruning (tsrn_depth.py) are skipped.
 """
 import copy
 import random
@@ -202,10 +202,13 @@ class TrunkGroup:
     kind = 'gru'
 
     def residual_blocks(self):
-        return [getattr(self.model, f'block{i + 2}') for i in range(self.model.srb_nums)]
+        """The SRBs still in the model (depth pruning replaces removed ones by nn.Identity)."""
+        blocks = (getattr(self.model, f'block{i + 2}') for i in range(self.model.srb_nums))
+        return [block for block in blocks if isinstance(block, RecurrentResidualBlock)]
 
     def gru_blocks(self):
-        return [gru for block in self.residual_blocks() for gru in (block.gru1, block.gru2)]
+        return [gru for block in self.residual_blocks() for gru in (block.gru1, block.gru2)
+                if isinstance(gru, GruBlock)]
 
     def trunk_layers(self):
         """(convolution, dim) pairs holding trunk channels (dim 0 = output, dim 1 = input), and the BatchNorms."""
@@ -215,18 +218,25 @@ class TrunkGroup:
         refine_conv, refine_bn = getattr(self.model, f'block{self.model.srb_nums + 2}')
         upsampler = getattr(self.model, f'block{self.model.srb_nums + 3}')[0]
         tail_conv = upsampler.conv if isinstance(upsampler, UpsampleBLock) else upsampler
-        convs = [(head, 0)]
+        convs, bns = [(head, 0)], [refine_bn]
         for block in self.residual_blocks():
-            convs += [(block.conv1, 1), (block.gru2.conv1, 1)]
+            convs.append((block.conv1, 1))
+            if not isinstance(block.gru1, GruBlock):  # vertical GRU removed: conv2 -> bn2 writes the trunk
+                convs.append((block.conv2, 0))
+                bns.append(block.bn2)
+            if isinstance(block.gru2, GruBlock):
+                convs.append((block.gru2.conv1, 1))
         convs += [(refine_conv, 1), (refine_conv, 0), (tail_conv, 1)]
-        return convs, [refine_bn]
+        return convs, bns
 
     @property
     def units(self):
+        """Trunk channel pairs (u, H + u): H is half the trunk width, which is every GRU's hidden size."""
+        hidden = self.model.block1[0].out_channels // 2
         sizes = {block.gru.hidden_size for block in self.gru_blocks()}
-        if len(sizes) != 1:
-            raise RuntimeError(f'GRUs have different hidden sizes {sizes}; the trunk can not be indexed')
-        return sizes.pop()
+        if sizes - {hidden}:
+            raise RuntimeError(f'GRU hidden sizes {sizes} differ from half the trunk width ({hidden})')
+        return hidden
 
     def importance(self, criterion):
         hidden = self.units
@@ -255,12 +265,16 @@ class TrunkGroup:
 
 
 def prunable_groups(model, gru=False):
-    """The convolution groups, then (with `gru`) the GRU input groups and the trunk group."""
+    """The convolution groups, then (with `gru`) the GRU input groups and the trunk group.
+
+    Blocks and GRUs removed by depth pruning (tsrn_depth) are skipped.
+    """
     groups = []
     for name, module in model.named_children():
         if isinstance(module, RecurrentResidualBlock):
             groups.append(ChannelGroup(f'{name}.conv1', module.conv1, module.conv2, bn=module.bn1))
-            groups.append(ChannelGroup(f'{name}.conv2', module.conv2, module.gru1.conv1, bn=module.bn2))
+            if isinstance(module.gru1, GruBlock):  # without it, conv2 writes the trunk (TrunkGroup)
+                groups.append(ChannelGroup(f'{name}.conv2', module.conv2, module.gru1.conv1, bn=module.bn2))
 
     tail_name = f'block{model.srb_nums + 3}'
     tail = list(getattr(model, tail_name))
@@ -273,8 +287,9 @@ def prunable_groups(model, gru=False):
     if gru:
         for name, module in model.named_children():
             if isinstance(module, RecurrentResidualBlock):
-                groups.append(GruInputGroup(f'{name}.gru1.conv1', module.gru1))
-                groups.append(GruInputGroup(f'{name}.gru2.conv1', module.gru2))
+                for gru_name in ('gru1', 'gru2'):
+                    if isinstance(getattr(module, gru_name), GruBlock):
+                        groups.append(GruInputGroup(f'{name}.{gru_name}.conv1', getattr(module, gru_name)))
         groups.append(TrunkGroup('trunk', model))
     return groups
 

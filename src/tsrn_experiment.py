@@ -19,6 +19,7 @@ import yaml
 from easydict import EasyDict
 from torch.utils.data import DataLoader, RandomSampler, Subset
 
+import tsrn_depth
 import tsrn_pruning
 from dataset.dataset import ConcatDataset, alignCollate_real, lmdbDataset_real
 from interfaces.base import TextBase
@@ -86,16 +87,17 @@ def load_tsrn(checkpoint, device):
 
 
 def load_pruned(checkpoint, device):
-    """A pruned TSRN saved with save_pruned: the channel sizes are restored before the weights."""
+    """A pruned TSRN saved with save_pruned: removed blocks/GRUs and channel sizes are restored before the weights."""
     saved = torch.load(checkpoint, map_location='cpu', weights_only=True)
-    model = tsrn_pruning.shrink_to(build_tsrn(), saved['channels'])
+    model = tsrn_depth.remove_parts(build_tsrn(), saved.get('depth', []))  # older checkpoints: no depth key
+    model = tsrn_pruning.shrink_to(model, saved['channels'])
     model.load_state_dict(saved['state_dict_G'])
     return tsrn_pruning.compact_gru_weights(model.to(device))
 
 
 def save_pruned(model, path, **info):
     save_atomic({'state_dict_G': model.state_dict(), 'channels': tsrn_pruning.channel_sizes(model, gru=True),
-                 'info': info}, path)
+                 'depth': tsrn_depth.removed_parts(model), 'info': info}, path)
 
 
 def frozen_copy(model):
