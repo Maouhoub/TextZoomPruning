@@ -6,7 +6,12 @@ Each check runs on the full model and on a depth-pruned one (a block and two GRU
    This checks that every group cuts the right rows and columns.
 2. Taylor pruning of every group, a training step through the smaller GRUs, and a
    save/rebuild/load round trip.
+3. Checkpoints saved like train_tsrn_baseline.py (full, or shallow with --remove_parts) load back
+   with tsrn_experiment.load_tsrn to the same model.
 """
+import os
+import tempfile
+
 import torch
 
 import tsrn_depth
@@ -113,9 +118,26 @@ def check_taylor_round_trip(case, parts):
     assert difference < TOLERANCE, 'a rebuilt model does not load to the same model'
 
 
+def check_checkpoint_loading():
+    import tsrn_experiment as exp  # needs the full project environment (config, recognizers)
+
+    for case, parts in {'full TSRN': [], 'shallow TSRN (2 blocks)': ['block2', 'block3', 'block4']}.items():
+        model = build(parts)
+        with tempfile.TemporaryDirectory() as folder:
+            path = os.path.join(folder, 'final.pth')
+            torch.save({'state_dict_G': model.state_dict(), 'channels': tsrn_pruning.channel_sizes(model, gru=True),
+                        'depth': tsrn_depth.removed_parts(model), 'info': {'name': case}}, path)
+            loaded = exp.load_tsrn(path, 'cpu')
+        difference = tsrn_pruning.max_output_difference(model, loaded, 'cpu')
+        print(f'3. {case}: saved like train_tsrn_baseline.py, load_tsrn difference {difference:.1e}, '
+              f'removed {tsrn_depth.removed_parts(loaded)}')
+        assert tsrn_depth.removed_parts(loaded) == parts and difference < TOLERANCE
+
+
 if __name__ == '__main__':
     for case, parts in DEPTH_CASES.items():
         check_dead_units(case, parts)
     for case, parts in DEPTH_CASES.items():
         check_taylor_round_trip(case, parts)
+    check_checkpoint_loading()
     print('All checks passed.')

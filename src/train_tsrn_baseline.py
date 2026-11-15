@@ -16,6 +16,11 @@ beta1 0.5, gradient clipping 0.25, batch 512, 500 epochs) and changes only what 
 step, so a 16 GB GPU (T4) can follow the batch-512 recipe; only the BatchNorm statistics differ
 slightly, because they are computed per piece.
 
+`--remove_parts` trains a shallower TSRN from scratch with the same recipe, e.g.
+`--remove_parts block2 block3 block4` keeps 2 of the 5 blocks: exactly the architecture of the
+depth-pruned model that removes those blocks (same module names and sizes), so the two can be
+compared directly. Its checkpoints also store the removed parts (load with tsrn_experiment.load_tsrn).
+
 Resumable: every `--val_every` epochs the full training state is saved in the run folder; running
 the same command again continues from there, also on another GPU type.
 
@@ -31,6 +36,7 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 
+import tsrn_depth
 import tsrn_experiment as exp
 import tsrn_pruning
 from loss.image_loss import ImageLoss
@@ -79,13 +85,21 @@ def build_parser():
     parser.add_argument('--split_seed', type=int, default=0,
                         help='seed of the train/validation split (the pruning runs use the same)')
     parser.add_argument('--seed', type=int, default=0, help='seed of the weight initialisation and the batch order')
+    parser.add_argument('--remove_parts', nargs='*', default=[],
+                        help='train a shallower TSRN: blocks or GRUs removed before training, e.g. block2 block3 '
+                             '(names as in tsrn_depth.remove_parts; default: the full TSRN)')
     parser.add_argument('--eval_batch_size', type=int, default=256, help='MORAN supports at most 256')
     parser.add_argument('--workers', type=int, default=None, help='data loading processes (default: config value)')
     return parser
 
 
+def depth_tag(args):
+    return f"removed-{'-'.join(args.remove_parts)}" if args.remove_parts else ''
+
+
 def default_run_name(args):
-    return (f'tsrn_clean-baseline_train{round((1 - args.val_fraction) * 100)}pct-split{args.split_seed}'
+    shallow = f'_{depth_tag(args)}' if args.remove_parts else ''
+    return (f'tsrn_clean-baseline{shallow}_train{round((1 - args.val_fraction) * 100)}pct-split{args.split_seed}'
             f'_bs{args.batch_size}_lr{args.lr:g}_beta{args.beta1:g}_{args.epochs}ep_seed{args.seed}')
 
 
@@ -160,7 +174,10 @@ def main():
                                    generator=generator, persistent=True)
 
     exp.set_seed(args.seed)
-    model = exp.build_tsrn().to(device)
+    model = tsrn_depth.remove_parts(exp.build_tsrn(), args.remove_parts).to(device)
+    if args.remove_parts:
+        log(f'shallow TSRN: removed {" ".join(args.remove_parts)}, {tsrn_pruning.inference_parameters(model):,d} '
+            f'inference weights, {tsrn_depth.gru_steps(model)} GRU steps per image (full TSRN: 800)')
     criterion = ImageLoss(gradient=True, loss_weight=[1, 1e-4]).to(device)
     optimizer = optim.Adam(model.parameters(), lr=args.lr, betas=(args.beta1, 0.999))
     state_path = os.path.join(run_dir, 'state', 'last.pth')
@@ -172,10 +189,13 @@ def main():
         history, best, first_epoch = state['history'], state['best'], state['epoch'] + 1
         log(f"continuing after epoch {state['epoch']}")
     tsrn_pruning.compact_gru_weights(model)
-    name = 'clean' if args.seed == 0 else f'clean-seed{args.seed}'
+    name = '-'.join(['clean'] + ([depth_tag(args)] if args.remove_parts else [])
+                    + ([f'seed{args.seed}'] if args.seed else []))
 
     def save_weights(path, epoch, label):
-        exp.save_atomic({'state_dict_G': model.state_dict(),
+        # The sizes and removed parts let tsrn_experiment.load_tsrn rebuild a shallow TSRN.
+        exp.save_atomic({'state_dict_G': model.state_dict(), 'channels': tsrn_pruning.channel_sizes(model, gru=True),
+                         'depth': tsrn_depth.removed_parts(model),
                          'info': {'name': label, 'run_name': run_name, 'epoch': epoch, 'val_split': split}}, path)
 
     def train_one_epoch(epoch):

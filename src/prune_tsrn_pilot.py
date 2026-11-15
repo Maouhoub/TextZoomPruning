@@ -9,8 +9,9 @@
    0 = GRUs protected). Units are scored with Taylor importance on the image loss, plus the CTC loss of a frozen
    CRNN reading the output when `--score_rec_weight` > 0 (reading-aware pruning).
 3. Check the pruned model still outputs a valid 4 x 32 x 128 image.
-4. Fine-tune with the unpruned model as a distillation teacher (plus the CRNN reading loss when
-   `--ft_rec_weight` > 0).
+4. Fine-tune with the unpruned model as a distillation teacher (or `--teacher`, e.g. the full TSRN
+   when `--resume` is a shallow TSRN trained from scratch), plus the CRNN reading loss when
+   `--ft_rec_weight` > 0.
 5. Measure OCR accuracy (ASTER, MORAN, CRNN), PSNR/SSIM, size and latency, before and after.
    What every reader reads on every test image is kept, so pilots can be compared with McNemar
    tests (compare_pilots.py).
@@ -33,6 +34,8 @@ from loss.image_loss import ImageLoss
 def parse_args():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('--resume', required=True, help='trained TSRN checkpoint (state_dict_G)')
+    parser.add_argument('--teacher', default=None,
+                        help='distillation teacher checkpoint (default: the --resume model before pruning)')
     parser.add_argument('--out_dir', required=True)
     parser.add_argument('--config', default='config/super_resolution.yaml')
     parser.add_argument('--ratio', type=float, default=0.2, help='fraction of channels removed per convolution group')
@@ -105,12 +108,13 @@ def main():
     # 1. Validation split of the training set.
     data = exp.load_data(config.TRAIN, args, os.path.join(args.out_dir, 'val_split.json'), with_test=not args.skip_test)
     print(f'1. split: {data.n_train} train / {data.n_val} validation images', flush=True)
-    exp.check_baseline_split(args.resume, data.val_indices)
+    for checkpoint in filter(None, (args.resume, args.teacher)):
+        exp.check_baseline_split(checkpoint, data.val_indices)
     recognizers = {rec: textbase.load_recognizer(rec) for rec in (exp.RECOGNIZERS if data.test else ('crnn',))}
     val_recognizers = {'crnn': recognizers['crnn']}
 
     student = exp.load_tsrn(args.resume, device)
-    teacher = exp.frozen_copy(student)
+    teacher = exp.frozen_copy(exp.load_tsrn(args.teacher, device) if args.teacher else student)
 
     def measure(model, keep_predictions=False):
         stage = exp.describe(model, device)

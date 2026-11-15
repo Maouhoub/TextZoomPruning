@@ -81,8 +81,12 @@ def build_tsrn():
 
 
 def load_tsrn(checkpoint, device):
+    """A trained TSRN: the full model, or a smaller one (pruned, or trained shallow from scratch)."""
+    saved = torch.load(checkpoint, map_location='cpu', weights_only=True)
+    if 'channels' in saved:
+        return load_pruned(checkpoint, device)
     model = build_tsrn()
-    model.load_state_dict(torch.load(checkpoint, map_location='cpu', weights_only=True)['state_dict_G'])
+    model.load_state_dict(saved['state_dict_G'])
     return tsrn_pruning.compact_gru_weights(model.to(device))
 
 
