@@ -1,7 +1,10 @@
 """Pruning pilot for TSRN: one pruning step on the convolutions, a short fine-tune, then measure.
 
 1. Hold out a validation split of the training set (model selection never looks at the test sets).
-2. Prune `--ratio` of the channels of every prunable convolution group, and `--gru_ratio` of
+2. Depth pruning (optional): remove `--remove_blocks` whole residual blocks, chosen one at a time
+   as the block whose removal hurts validation reading (CRNN, or PSNR with `--depth_criterion psnr`)
+   least, then `--remove_grus` (gru1 = vertical, gru2 = horizontal GRUs) in every remaining block.
+   Then prune `--ratio` of the channels of every prunable convolution group, and `--gru_ratio` of
    every GRU group (GRU input features, and GRU hidden units with the trunk channels tied to them;
    0 = GRUs protected). Units are scored with Taylor importance on the image loss, plus the CTC loss of a frozen
    CRNN reading the output when `--score_rec_weight` > 0 (reading-aware pruning).
@@ -21,6 +24,7 @@ import os
 
 import torch
 
+import tsrn_depth
 import tsrn_experiment as exp
 import tsrn_pruning
 from loss.image_loss import ImageLoss
@@ -34,6 +38,12 @@ def parse_args():
     parser.add_argument('--ratio', type=float, default=0.2, help='fraction of channels removed per convolution group')
     parser.add_argument('--gru_ratio', type=float, default=0.0,
                         help='fraction of units removed per GRU group (0 = GRUs and trunk protected)')
+    parser.add_argument('--remove_blocks', type=int, default=0,
+                        help='whole residual blocks removed (depth pruning), chosen one at a time on validation')
+    parser.add_argument('--depth_criterion', default='crnn', choices=['crnn', 'psnr'],
+                        help='validation score kept highest when choosing the block to remove')
+    parser.add_argument('--remove_grus', default='none', choices=['none', 'gru1', 'gru2'],
+                        help='remove this GRU in every remaining block (gru1 = vertical, gru2 = horizontal)')
     parser.add_argument('--round_to', type=int, default=4, help='channels are removed in multiples of this')
     parser.add_argument('--importance', default='taylor', choices=['taylor', 'magnitude'])
     parser.add_argument('--taylor_batches', type=int, default=2)
@@ -113,7 +123,23 @@ def main():
     print('   measuring the unpruned model...', flush=True)
     stages['baseline'] = measure(student, keep_predictions=True)
 
-    # 2. One pruning step on the convolutions.
+    # 2. Depth pruning (whole blocks, then whole GRUs), then one pruning step on the channels.
+    depth_selection = []
+    if args.remove_blocks:
+        print(f'2a. removing {args.remove_blocks} block(s), each time the one whose removal keeps validation '
+              f'{args.depth_criterion} highest:', flush=True)
+
+        def depth_score(model):
+            val = exp.evaluate(model, data.val, textbase, val_recognizers, device)
+            return val['accuracy']['crnn'] if args.depth_criterion == 'crnn' else val['psnr']
+
+        depth_selection = tsrn_depth.choose_blocks(student, args.remove_blocks, depth_score)
+    if args.remove_grus != 'none':
+        tsrn_depth.remove_parts(student, [f'{name}.{args.remove_grus}' for name in tsrn_depth.remaining_blocks(student)])
+    if depth_selection or args.remove_grus != 'none':
+        print(f'2a. removed: {" ".join(tsrn_depth.removed_parts(student))} '
+              f'({tsrn_depth.gru_steps(student)} GRU steps left of 800)', flush=True)
+
     criterion = ImageLoss(gradient=True, loss_weight=[1, 1e-4]).to(device)
     recognition = exp.make_recognition_loss(textbase) if args.score_rec_weight or args.ft_rec_weight else None
     # Reseed after loading the extra CRNN (its construction draws random numbers), so every pilot
@@ -154,7 +180,9 @@ def main():
     if difference > 1e-4:
         raise RuntimeError(f'{model_path} does not reload to the same model')
     exp.write_json(results_path, {'args': vars(args), 'environment': exp.environment_info(), 'pruning': report,
-                                  'channels': tsrn_pruning.channel_sizes(student, gru=True), 'fine_tune': history,
+                                  'channels': tsrn_pruning.channel_sizes(student, gru=True),
+                                  'depth': tsrn_depth.removed_parts(student), 'depth_selection': depth_selection,
+                                  'gru_steps': tsrn_depth.gru_steps(student), 'fine_tune': history,
                                   'best_epoch': best_epoch, 'stages': stages})
     print()
     print_summary(stages)

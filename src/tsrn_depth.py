@@ -48,6 +48,32 @@ def remove_parts(model, parts):
     return model
 
 
+def remaining_blocks(model):
+    return [name for name in residual_block_names(model) if isinstance(getattr(model, name), RecurrentResidualBlock)]
+
+
+def choose_blocks(model, count, score, log=print):
+    """Remove `count` SRBs one at a time (greedy): each time try removing every remaining block and
+    remove the one that leaves `score(model)` highest (e.g. validation reading accuracy).
+
+    Returns one record per removal: the score with each candidate removed, and the block chosen.
+    """
+    history = []
+    for step in range(1, count + 1):
+        scores = {}
+        for name in remaining_blocks(model):
+            block = getattr(model, name)
+            setattr(model, name, nn.Identity())
+            scores[name] = score(model)
+            setattr(model, name, block)  # put it back before trying the next one
+        chosen = max(scores, key=scores.get)
+        remove_parts(model, [chosen])
+        history.append({'step': step, 'scores_without': scores, 'removed': chosen})
+        log(f'     removal {step}: score without each block '
+            + ', '.join(f'{name} {value:.2f}' for name, value in scores.items()) + f' -> remove {chosen}')
+    return history
+
+
 def removed_parts(model):
     parts = []
     for name in residual_block_names(model):
