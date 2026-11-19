@@ -165,16 +165,18 @@ def load_data(cfg, args, split_path, with_test):
     else:
         write_json(split_path, split)
 
-    test = {}
-    if with_test:
-        by_name = {os.path.basename(os.path.normpath(d)): d for d in cfg.VAL.val_data_dir}
-        test = {name: make_loader(lmdbDataset_real(root=by_name[name], voc_type=cfg.voc_type,
-                                                   max_len=cfg.max_len, test=True),
-                                  args.eval_batch_size, cfg, shuffle=False)
-                for name in SPLIT_ORDER}
     return SimpleNamespace(train=make_loader(Subset(train_full, train_idx), args.batch_size, cfg, shuffle=True),
                            val=make_loader(Subset(train_full, val_idx), args.eval_batch_size, cfg, shuffle=False),
-                           test=test, n_train=len(train_idx), n_val=len(val_idx), val_indices=val_idx)
+                           test=make_test_loaders(cfg, args.eval_batch_size) if with_test else {},
+                           n_train=len(train_idx), n_val=len(val_idx), val_indices=val_idx)
+
+
+def make_test_loaders(cfg, eval_batch_size):
+    """The three TextZoom test splits (easy, medium, hard)."""
+    by_name = {os.path.basename(os.path.normpath(d)): d for d in cfg.VAL.val_data_dir}
+    return {name: make_loader(lmdbDataset_real(root=by_name[name], voc_type=cfg.voc_type, max_len=cfg.max_len,
+                                               test=True), eval_batch_size, cfg, shuffle=False)
+            for name in SPLIT_ORDER}
 
 
 # ---------------------------------------------------------------- measurements

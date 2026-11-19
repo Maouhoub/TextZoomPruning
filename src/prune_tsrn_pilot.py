@@ -10,8 +10,8 @@
    CRNN reading the output when `--score_rec_weight` > 0 (reading-aware pruning).
 3. Check the pruned model still outputs a valid 4 x 32 x 128 image.
 4. Fine-tune with the unpruned model as a distillation teacher (or `--teacher`, e.g. the full TSRN
-   when `--resume` is a shallow TSRN trained from scratch), plus the CRNN reading loss when
-   `--ft_rec_weight` > 0.
+   when `--resume` is a shallow TSRN trained from scratch, or `--teacher_lemma`, LEMMA's released
+   model), plus the CRNN reading loss when `--ft_rec_weight` > 0.
 5. Measure OCR accuracy (ASTER, MORAN, CRNN), PSNR/SSIM, size and latency, before and after.
    What every reader reads on every test image is kept, so pilots can be compared with McNemar
    tests (compare_pilots.py).
@@ -25,6 +25,7 @@ import os
 
 import torch
 
+import lemma_teacher
 import tsrn_depth
 import tsrn_experiment as exp
 import tsrn_pruning
@@ -34,8 +35,11 @@ from loss.image_loss import ImageLoss
 def parse_args():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('--resume', required=True, help='trained TSRN checkpoint (state_dict_G)')
-    parser.add_argument('--teacher', default=None,
-                        help='distillation teacher checkpoint (default: the --resume model before pruning)')
+    teacher = parser.add_mutually_exclusive_group()
+    teacher.add_argument('--teacher', default=None,
+                         help='distillation teacher checkpoint (default: the --resume model before pruning)')
+    teacher.add_argument('--teacher_lemma', default=None,
+                         help="LEMMA's released checkpoint as the distillation teacher (run only, never trained)")
     parser.add_argument('--out_dir', required=True)
     parser.add_argument('--config', default='config/super_resolution.yaml')
     parser.add_argument('--ratio', type=float, default=0.2, help='fraction of channels removed per convolution group')
@@ -110,11 +114,17 @@ def main():
     print(f'1. split: {data.n_train} train / {data.n_val} validation images', flush=True)
     for checkpoint in filter(None, (args.resume, args.teacher)):
         exp.check_baseline_split(checkpoint, data.val_indices)
+    if args.teacher_lemma:
+        print('   note: LEMMA was trained on the whole TextZoom training set, our validation images included; '
+              'validation only reports progress here, it selects nothing with --select_by last')
     recognizers = {rec: textbase.load_recognizer(rec) for rec in (exp.RECOGNIZERS if data.test else ('crnn',))}
     val_recognizers = {'crnn': recognizers['crnn']}
 
     student = exp.load_tsrn(args.resume, device)
-    teacher = exp.frozen_copy(exp.load_tsrn(args.teacher, device) if args.teacher else student)
+    if args.teacher_lemma:
+        teacher = lemma_teacher.load_lemma(args.teacher_lemma, device)
+    else:
+        teacher = exp.frozen_copy(exp.load_tsrn(args.teacher, device) if args.teacher else student)
 
     def measure(model, keep_predictions=False):
         stage = exp.describe(model, device)

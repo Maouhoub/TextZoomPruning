@@ -8,6 +8,8 @@ Each check runs on the full model and on a depth-pruned one (a block and two GRU
    save/rebuild/load round trip.
 3. Checkpoints saved like train_tsrn_baseline.py (full, or shallow with --remove_parts) load back
    with tsrn_experiment.load_tsrn to the same model.
+4. LEMMA's network (copied code, random weights) runs, its guidance branch runs alone, and a file in
+   the layout of LEMMA's release loads back strictly to the same model.
 """
 import os
 import tempfile
@@ -134,10 +136,34 @@ def check_checkpoint_loading():
         assert tsrn_depth.removed_parts(loaded) == parts and difference < TOLERANCE
 
 
+@torch.no_grad()
+def check_lemma():
+    import lemma_teacher
+
+    torch.manual_seed(0)
+    lemma = lemma_teacher.LemmaSR().eval()
+    x = random_input()
+    output = lemma(x)
+    guidance = lemma_teacher.LemmaGuidance(lemma)(x)
+    assert output.shape == (2, 4, 32, 128) and guidance.shape == (2, 64, *tsrn_pruning.LR_SIZE)
+    assert (lemma.reconstruct(lemma.align(x)) - output).abs().max() < TOLERANCE
+    with tempfile.TemporaryDirectory() as folder:  # the released file's layout, saved from a multi-GPU model
+        path = os.path.join(folder, 'lemma.pth')
+        torch.save({'state_dict_G': {f'module.{k}': v for k, v in lemma.net.state_dict().items()}}, path)
+        loaded = lemma_teacher.load_lemma(path, 'cpu')
+    difference = (loaded(x) - output).abs().max().item()
+    counts = lemma_teacher.parameter_counts(lemma)
+    print(f"4. LEMMA network (random weights): output {tuple(output.shape)}, guidance {tuple(guidance.shape)}, "
+          f"reload difference {difference:.1e}, {counts['inference']:,} inference parameters "
+          f"({counts['guidance_branch']:,} in the guidance branch)")
+    assert difference < TOLERANCE and not any(p.requires_grad for p in loaded.parameters())
+
+
 if __name__ == '__main__':
     for case, parts in DEPTH_CASES.items():
         check_dead_units(case, parts)
     for case, parts in DEPTH_CASES.items():
         check_taylor_round_trip(case, parts)
     check_checkpoint_loading()
+    check_lemma()
     print('All checks passed.')
