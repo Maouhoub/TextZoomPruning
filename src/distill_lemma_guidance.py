@@ -11,7 +11,10 @@ weights, frozen.
 2. Test accuracy with ASTER, MORAN and CRNN, and McNemar tests against LEMMA, image by image.
 3. Size, and speed in one session: the student, LEMMA, and the TSRN checkpoints given with --compare.
 4. Decision rule, fixed before the run. PASS if both hold:
-   - the student reads at least as well as SGENet (61.4 / 57.3 / 49.0, ICASSP 2024) on all three readers;
+   - the student loses at most 2 points against LEMMA on every reader (our LEMMA: 67.35 / 65.04 /
+     56.48), which still reads above every other model in SGENet's Table 1 (TATT: 63.6 / 59.5 / 52.6).
+     Merely matching SGENet (61.4 / 57.3 / 49.0) is not enough: SGENet is cheaper than the student,
+     so it would be the better deal;
    - it is at least x2 faster than LEMMA on CPU (1 thread, 1 image) and on GPU batch 64.
    GPU batch 1 is reported.
 
@@ -37,6 +40,7 @@ import tsrn_pruning
 from rescore_trajectory import mcnemar
 
 SGENET = {'aster': 61.4, 'moran': 57.3, 'crnn': 49.0}  # SGENet (ICASSP 2024) Table 1, same three readers
+MAX_LOSS_VS_LEMMA = 2.0  # points per reader
 SPEED_SETTINGS = ('cpu1_b1', 'gpu_b64')  # where LEMMA's guidance branch takes 72% and 74% of the time
 MIN_SPEEDUP = 2.0
 
@@ -138,22 +142,25 @@ def compare_with_lemma(test, lemma_test):
     return result
 
 
-def decide(accuracy, speedup):
+def decide(accuracy, lemma_accuracy, speedup):
     checked = [key for key in SPEED_SETTINGS if key in speedup]  # no GPU: CPU only
-    reads = all(accuracy[rec] >= SGENET[rec] for rec in exp.RECOGNIZERS)
+    near_lemma = all(accuracy[rec] >= lemma_accuracy[rec] - MAX_LOSS_VS_LEMMA for rec in exp.RECOGNIZERS)
     faster = bool(checked) and all(speedup[key] >= MIN_SPEEDUP for key in checked)
-    return {'accuracy': accuracy, 'sgenet': SGENET, 'reads_at_least_sgenet': reads,
+    return {'accuracy': accuracy, 'lemma_accuracy': lemma_accuracy, 'sgenet': SGENET,
+            'within_2_points_of_lemma': near_lemma,
+            'reads_at_least_sgenet': all(accuracy[rec] >= SGENET[rec] for rec in exp.RECOGNIZERS),
             'speedup_vs_lemma': speedup, 'speed_settings_checked': checked,
-            'at_least_x2_faster': faster, 'verdict': 'PASS' if reads and faster else 'FAIL'}
+            'at_least_x2_faster': faster, 'verdict': 'PASS' if near_lemma and faster else 'FAIL'}
 
 
 def print_decision(decision):
-    accuracy, speedup = decision['accuracy'], decision['speedup_vs_lemma']
-    print('decision rule: reads at least SGENet on all three readers, and at least x2 faster than LEMMA on '
-          + ' and '.join(decision['speed_settings_checked']))
-    print('   reading ' + ', '.join(f"{rec.upper()} {accuracy[rec]:.2f} (SGENet {decision['sgenet'][rec]})"
-                                    for rec in exp.RECOGNIZERS)
-          + f" -> {'ok' if decision['reads_at_least_sgenet'] else 'below'}")
+    accuracy, lemma, speedup = decision['accuracy'], decision['lemma_accuracy'], decision['speedup_vs_lemma']
+    print(f'decision rule: at most {MAX_LOSS_VS_LEMMA:g} points below LEMMA on every reader, and at least '
+          f'x{MIN_SPEEDUP:g} faster than LEMMA on ' + ' and '.join(decision['speed_settings_checked']))
+    print('   reading ' + ', '.join(f"{rec.upper()} {accuracy[rec]:.2f} (LEMMA {lemma[rec]:.2f}, "
+                                    f"SGENet {decision['sgenet'][rec]})" for rec in exp.RECOGNIZERS)
+          + f" -> {'ok' if decision['within_2_points_of_lemma'] else 'too far below LEMMA'}"
+          + ('' if decision['reads_at_least_sgenet'] else ', and below SGENet'))
     print('   speed-up vs LEMMA ' + ', '.join(f'{key} x{value:.2f}' for key, value in speedup.items())
           + f" -> {'ok' if decision['at_least_x2_faster'] else 'too slow'}")
     print(f"   VERDICT: {decision['verdict']}")
@@ -218,7 +225,7 @@ def main():
     print('   (xN = speed relative to LEMMA)')
 
     speedup = {key: latency['LEMMA'][key] / latency['student'][key] for key in latency['student']}
-    decision = decide(accuracy, speedup)
+    decision = decide(accuracy, lemma_test['average']['accuracy'], speedup)
     exp.write_json(results_path, {'args': vars(args), 'environment': exp.environment_info(), 'history': history,
                                   'test': test, 'lemma_accuracy': lemma_test['average']['accuracy'],
                                   'versus_lemma': versus_lemma, 'size': size, 'latency_ms': latency,
