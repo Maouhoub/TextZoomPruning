@@ -10,6 +10,9 @@ Each check runs on the full model and on a depth-pruned one (a block and two GRU
    with tsrn_experiment.load_tsrn to the same model.
 4. LEMMA's network (copied code, random weights) runs, its guidance branch runs alone, and a file in
    the layout of LEMMA's release loads back strictly to the same model.
+5. LEMMA with a small guidance network (lemma_fast.py): the shared forward pieces reproduce LEMMA,
+   the copied SR branch gives LEMMA's output from LEMMA's guidance map, a training step moves only
+   the guidance network, and a saved model loads back the same.
 """
 import os
 import tempfile
@@ -159,6 +162,47 @@ def check_lemma():
     assert difference < TOLERANCE and not any(p.requires_grad for p in loaded.parameters())
 
 
+def check_lemma_fast():
+    import lemma_fast
+    import lemma_teacher
+
+    torch.manual_seed(0)
+    lemma = lemma_teacher.LemmaSR().eval()
+    x = random_input()
+    with torch.no_grad():
+        target_sr, target_map = lemma_teacher.outputs_with_guidance(lemma, x)
+        same_as_lemma = (target_sr - lemma(x)).abs().max().item()
+        # The student's SR branch is LEMMA's: fed LEMMA's own guidance map, it must give LEMMA's output.
+        student = lemma_fast.LemmaFastSR(lemma, lemma_fast.GuidanceNet(64)).eval()
+        features = student.block1(x)
+        copied_branch = (lemma_teacher.sr_branch(student, features, target_map) - target_sr).abs().max().item()
+        shapes = {width: tuple(lemma_fast.GuidanceNet(width)(features).shape) for width in (64, 128)}
+    assert same_as_lemma < TOLERANCE and copied_branch < TOLERANCE
+    assert all(shape == (2, 64, *tsrn_pruning.LR_SIZE) for shape in shapes.values())
+
+    # One training step moves only GuidanceNet: the SR weights and batch-norm statistics stay as they were.
+    before = {k: v.clone() for k, v in student.state_dict().items() if not k.startswith('guidance.')}
+    lemma_fast.train_guidance_only(student)
+    optimizer = torch.optim.Adam(student.guidance.parameters(), lr=1e-3)
+    student(x).pow(2).mean().backward()
+    optimizer.step()
+    moved = [k for k, v in student.state_dict().items() if not k.startswith('guidance.') and not torch.equal(v, before[k])]
+    with_grad = [n for n, p in student.named_parameters() if p.grad is not None and not n.startswith('guidance.')]
+    assert not moved and not with_grad, f'the frozen SR branch changed: {moved or with_grad}'
+
+    with tempfile.TemporaryDirectory() as folder:
+        path = os.path.join(folder, 'lemma_fast.pth')
+        lemma_fast.save(student, path)
+        loaded = lemma_fast.load(path, 'cpu')
+    difference = tsrn_pruning.max_output_difference(student, loaded, 'cpu')
+    counts = lemma_fast.parameter_counts(student)
+    print(f"5. LEMMA with a small guidance network: LEMMA's forward reproduced ({same_as_lemma:.1e}), its SR "
+          f"branch copied ({copied_branch:.1e}), guidance map {shapes[64]}, a training step moves only the "
+          f"guidance network, reload difference {difference:.1e}; {counts['sr_branch']:,} SR + "
+          f"{counts['guidance_branch']:,} guidance parameters (width 64)")
+    assert difference < TOLERANCE
+
+
 if __name__ == '__main__':
     for case, parts in DEPTH_CASES.items():
         check_dead_units(case, parts)
@@ -166,4 +210,5 @@ if __name__ == '__main__':
         check_taylor_round_trip(case, parts)
     check_checkpoint_loading()
     check_lemma()
+    check_lemma_fast()
     print('All checks passed.')

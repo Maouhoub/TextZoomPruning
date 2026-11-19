@@ -52,6 +52,31 @@ class LemmaSR(nn.Module):
         return self.reconstruct(x)
 
 
+def guidance_map(net, x, features):
+    """LEMMA's text-guidance branch, as in LEMMA.forward: an ABINet-style reading of the bicubic-upscaled
+    image, aligned with the first-layer features into a 64 x 16 x 64 guidance map."""
+    upscaled = F.interpolate(x[:, :3], scale_factor=2, mode='bicubic', align_corners=True)
+    guidance, _ = net.guidanceGen(net.position_prior(upscaled), features)
+    return guidance
+
+
+def sr_branch(net, features, guidance):
+    """LEMMA's SR branch after its first layer, as in LEMMA.forward: residual blocks modulated by the
+    guidance map, then the refine block, the upsampler and tanh. `net` is LEMMA or a LemmaFastSR."""
+    block = {'1': features}
+    for i in range(net.srb_nums + 1):
+        layer = getattr(net, f'block{i + 2}')
+        block[str(i + 2)] = layer(block[str(i + 1)], guidance) if i + 2 in net.block_range else layer(block[str(i + 1)])
+    return torch.tanh(getattr(net, f'block{net.srb_nums + 3}')(block['1'] + block[str(net.srb_nums + 2)]))
+
+
+def outputs_with_guidance(lemma, x):
+    """LEMMA's SR image and its guidance map from one pass (the distillation targets)."""
+    features = lemma.net.block1(x)
+    guidance = guidance_map(lemma.net, x, features)
+    return sr_branch(lemma.net, features, guidance), guidance
+
+
 class LemmaGuidance(nn.Module):
     """Only LEMMA's text-guidance branch, exactly as in LEMMA.forward, to time it on its own."""
 
@@ -61,9 +86,7 @@ class LemmaGuidance(nn.Module):
 
     def forward(self, x):
         net = self.lemma.net
-        upscaled = F.interpolate(x[:, :3], scale_factor=2, mode='bicubic', align_corners=True)
-        guidance, _ = net.guidanceGen(net.position_prior(upscaled), net.block1(x))
-        return guidance
+        return guidance_map(net, x, net.block1(x))
 
 
 def read_weights(checkpoint):
