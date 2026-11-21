@@ -98,3 +98,7 @@ def load(path, device):
     model = LemmaFastSR(lemma_teacher.LemmaSR(), GuidanceNet(saved['width']))
     model.load_state_dict(saved['state_dict'])
     return model.to(device).eval()
+
+
+def saved_info(path):
+    return torch.load(path, map_location='cpu', weights_only=True)['info']

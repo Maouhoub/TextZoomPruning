@@ -20,7 +20,8 @@ weights, frozen.
 
     python distill_lemma_guidance.py --lemma <LEMMA-release.pth> --width 64 --out_dir <folder>
 
-A run whose results.json exists is skipped (an interrupted run starts again).
+A run whose results.json exists is skipped. A run interrupted after training reuses its saved
+lemma_fast.pth (only testing and timing run again); one interrupted during training starts again.
 """
 import argparse
 import os
@@ -190,14 +191,23 @@ def main():
     print(f"   student: LEMMA's SR branch, frozen ({counts['sr_branch']:,} parameters) + GuidanceNet "
           f"width {args.width}, trained ({counts['guidance_branch']:,} parameters)")
 
-    print(f'2. training GuidanceNet for {args.epochs} epochs (last epoch kept):', flush=True)
-    history = train(student, teacher, data, args, device, textbase, recognizers['crnn'])
     model_path = os.path.join(args.out_dir, 'lemma_fast.pth')
-    lemma_fast.save(student, model_path, lemma=args.lemma, width=args.width, epochs=args.epochs, seed=args.seed)
-    difference = tsrn_pruning.max_output_difference(student, lemma_fast.load(model_path, device), device)
-    print(f'   saved {model_path}; reload difference {difference:.1e}')
-    if difference > 1e-4:
-        raise RuntimeError(f'{model_path} does not reload to the same model')
+    if os.path.exists(model_path):  # training finished before an interruption: reuse the trained model
+        info = lemma_fast.saved_info(model_path)
+        if (info['width'], info['epochs'], info['seed']) != (args.width, args.epochs, args.seed):
+            raise RuntimeError(f'{model_path} was trained with other settings: {info}')
+        student = lemma_fast.load(model_path, device)
+        history = info.get('history')  # absent in files saved before the history was stored
+        print(f'2. {model_path} exists: training already done, model reused', flush=True)
+    else:
+        print(f'2. training GuidanceNet for {args.epochs} epochs (last epoch kept):', flush=True)
+        history = train(student, teacher, data, args, device, textbase, recognizers['crnn'])
+        lemma_fast.save(student, model_path, lemma=args.lemma, width=args.width, epochs=args.epochs,
+                        seed=args.seed, history=history)
+        difference = tsrn_pruning.max_output_difference(student, lemma_fast.load(model_path, device), device)
+        print(f'   saved {model_path}; reload difference {difference:.1e}')
+        if difference > 1e-4:
+            raise RuntimeError(f'{model_path} does not reload to the same model')
 
     print('3. test accuracy with ASTER, MORAN and CRNN, and McNemar vs LEMMA...', flush=True)
     test = exp.evaluate_test(student, data.test, textbase, recognizers, device, keep_predictions=True)
