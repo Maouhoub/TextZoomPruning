@@ -13,6 +13,9 @@ Each check runs on the full model and on a depth-pruned one (a block and two GRU
 5. LEMMA with a small guidance network (lemma_fast.py): the shared forward pieces reproduce LEMMA,
    the copied SR branch gives LEMMA's output from LEMMA's guidance map, a training step moves only
    the guidance network, and a saved model loads back the same.
+6. Checks of LEMMA's reader (check_lemma_reader.py): its pieces rebuild LEMMA, the timing prefixes end
+   at LEMMA's guidance map, the part sizes add up to the guidance branch, and the true-word letters
+   decode back to the words.
 """
 import os
 import tempfile
@@ -203,6 +206,38 @@ def check_lemma_fast():
     assert difference < TOLERANCE
 
 
+@torch.no_grad()
+def check_lemma_reader():
+    import check_lemma_reader as reader_checks
+    import lemma_teacher
+
+    torch.manual_seed(0)
+    lemma = lemma_teacher.LemmaSR().eval()
+    x = random_input()
+    rebuilt = (reader_checks.GuidedLemma(lemma, reader_checks.as_lemma)(x) - lemma(x)).abs().max().item()
+    prefix = (reader_checks.GuidancePrefix(lemma, 'alignment')(x)
+              - lemma_teacher.LemmaGuidance(lemma)(x)).abs().max().item()
+    shapes = {part: tuple(reader_checks.GuidancePrefix(lemma, part)(x).shape) for part in reader_checks.PARTS}
+    expected = {'ResNet45': (2, 512, 8, 32), 'transformer x3': (2, 512, 8, 32),
+                'position attention + classifier': (2, 26, 37), 'language model x4': (2, 26, 37),
+                'alignment': (2, 64, *tsrn_pruning.LR_SIZE)}
+    params = reader_checks.part_parameters(lemma)
+    charset = lemma.net.position_prior.language.charset
+    words = ['hello', '42']
+    truth = reader_checks.TrueWords(charset)(reader_checks.read(lemma.net.position_prior, reader_checks.upscale(x)), words)
+    decoded = reader_checks.decode(truth['text_logits'], charset)
+    vision = reader_checks.GuidedLemma(lemma, reader_checks.vision_only)(x)
+    oracle = reader_checks.GuidedLemma(lemma, reader_checks.TrueWords(charset))(x, words)
+    print(f"6. LEMMA's reader checks: LEMMA rebuilt from its pieces ({rebuilt:.1e}), last prefix = guidance map "
+          f"({prefix:.1e}), part sizes {', '.join(f'{p} {n:,}' for p, n in params.items())}; true words decode to "
+          f"{decoded}, lengths {truth['pt_lengths'].tolist()}")
+    assert rebuilt < TOLERANCE and prefix < TOLERANCE
+    assert shapes == expected, shapes
+    assert sum(params.values()) == lemma_teacher.parameter_counts(lemma)['guidance_branch'], params
+    assert decoded == words and truth['pt_lengths'].tolist() == [6, 3]
+    assert tuple(vision.shape) == tuple(oracle.shape) == (2, 4, 32, 128)
+
+
 if __name__ == '__main__':
     for case, parts in DEPTH_CASES.items():
         check_dead_units(case, parts)
@@ -211,4 +246,5 @@ if __name__ == '__main__':
     check_checkpoint_loading()
     check_lemma()
     check_lemma_fast()
+    check_lemma_reader()
     print('All checks passed.')

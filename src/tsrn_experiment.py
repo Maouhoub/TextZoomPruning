@@ -182,14 +182,15 @@ def make_test_loaders(cfg, eval_batch_size):
 # ---------------------------------------------------------------- measurements
 
 @torch.no_grad()
-def predict(model, loader, textbase, recognizers, device):
+def predict(model, loader, textbase, recognizers, device, with_labels=False):
     """What every recognizer reads on every image (lower case, as compared with the labels), the
-    labels, and PSNR/SSIM with the TextZoom protocol (per batch, then averaged)."""
+    labels, and PSNR/SSIM with the TextZoom protocol (per batch, then averaged). With `with_labels`
+    the model also gets the batch's labels (for checks that feed it the true words)."""
     model.eval()
     predictions = {name: [] for name in recognizers}
     labels, psnr, ssim = [], [], []
     for images_hr, images_lr, batch_labels in loader:
-        images_sr = model(images_lr.to(device))
+        images_sr = model(images_lr.to(device), batch_labels) if with_labels else model(images_lr.to(device))
         images_hr = images_hr.to(device)
         psnr.append(textbase.cal_psnr(images_sr, images_hr).item())
         ssim.append(textbase.cal_ssim(images_sr, images_hr).item())
@@ -213,9 +214,10 @@ def evaluate(model, loader, textbase, recognizers, device):
     return summarize(predict(model, loader, textbase, recognizers, device))
 
 
-def evaluate_test(model, test_loaders, textbase, recognizers, device, keep_predictions=False):
+def evaluate_test(model, test_loaders, textbase, recognizers, device, keep_predictions=False, with_labels=False):
     """Per split and weighted average; with `keep_predictions`, also what every reader read on every image."""
-    predicted = {name: predict(model, loader, textbase, recognizers, device) for name, loader in test_loaders.items()}
+    predicted = {name: predict(model, loader, textbase, recognizers, device, with_labels)
+                 for name, loader in test_loaders.items()}
     results = {name: summarize(p) for name, p in predicted.items()}
     images = sum(r['images'] for r in results.values())
     results['average'] = {'accuracy': {rec: sum(r['accuracy'][rec] * r['images'] for r in results.values()) / images
