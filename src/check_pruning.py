@@ -16,6 +16,9 @@ Each check runs on the full model and on a depth-pruned one (a block and two GRU
 6. Checks of LEMMA's reader (check_lemma_reader.py): its pieces rebuild LEMMA, the timing prefixes end
    at LEMMA's guidance map, the part sizes add up to the guidance branch, and the true-word letters
    decode back to the words.
+7. Slim LEMMA backbones (lemma_backbone.py): at full width with 3 layers the slim backbone loads LEMMA's
+   backbone weights strictly and gives the same output; thinner and shallower ones keep the 512 x 8 x 32
+   interface, and LEMMA with one still gives a 4 x 32 x 128 image.
 """
 import os
 import tempfile
@@ -238,6 +241,32 @@ def check_lemma_reader():
     assert tuple(vision.shape) == tuple(oracle.shape) == (2, 4, 32, 128)
 
 
+@torch.no_grad()
+def check_slim_backbone():
+    import check_lemma_reader as reader_checks
+    import lemma_backbone
+    import lemma_teacher
+
+    torch.manual_seed(0)
+    lemma = lemma_teacher.LemmaSR().eval()
+    original = lemma.net.position_prior.vision.backbone
+    images = reader_checks.normalize(lemma.net.position_prior, reader_checks.upscale(random_input()))
+    full = lemma_backbone.SlimBackbone(1.0, 3).eval()
+    full.load_state_dict(original.state_dict())  # strict: same names and shapes as LEMMA's backbone
+    same = (full(images) - original(images)).abs().max().item()
+    sizes = {}
+    for layers, width in ((2, 0.75), (1, 0.5), (0, 0.35)):
+        slim = lemma_backbone.SlimBackbone(width, layers).eval()
+        assert tuple(slim(images).shape) == (2, 512, 8, 32), (layers, width)
+        sizes[f'L{layers}_w{width:g}'] = sum(p.numel() for p in slim.parameters())
+    output = lemma_backbone.with_backbone(lemma, lemma_backbone.SlimBackbone(0.5, 1))(random_input())
+    print(f"7. slim LEMMA backbones: full width loads LEMMA's backbone, same output ({same:.1e}); "
+          f"{sum(p.numel() for p in original.parameters()):,} parameters vs "
+          + ', '.join(f'{name} {n:,}' for name, n in sizes.items()) + f'; LEMMA with L1_w0.5 gives {tuple(output.shape)}')
+    assert same < TOLERANCE and tuple(output.shape) == (2, 4, 32, 128)
+    assert lemma.net.position_prior.vision.backbone is original  # with_backbone left LEMMA unchanged
+
+
 if __name__ == '__main__':
     for case, parts in DEPTH_CASES.items():
         check_dead_units(case, parts)
@@ -247,4 +276,5 @@ if __name__ == '__main__':
     check_lemma()
     check_lemma_fast()
     check_lemma_reader()
+    check_slim_backbone()
     print('All checks passed.')
