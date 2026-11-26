@@ -35,10 +35,11 @@ def guidance_config():
 class LemmaSR(nn.Module):
     """LEMMA with our TSRN's interface: forward(LR image) returns only the SR image."""
 
-    def __init__(self):
+    def __init__(self, srb_nums=5):
         super().__init__()
-        # Same settings as LEMMA's main.py: STN, mask channel, 5 residual blocks.
-        self.net = LEMMA(scale_factor=2, width=128, height=32, STN=True, mask=True, srb_nums=5,
+        # Same settings as LEMMA's main.py: STN, mask channel, 5 residual blocks (fewer only for
+        # speed tests of shallower versions, section 24).
+        self.net = LEMMA(scale_factor=2, width=128, height=32, STN=True, mask=True, srb_nums=srb_nums,
                          cfg=guidance_config())
 
     def align(self, x):

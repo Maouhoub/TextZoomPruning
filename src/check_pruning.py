@@ -260,10 +260,13 @@ def check_slim_backbone():
         assert tuple(slim(images).shape) == (2, 512, 8, 32), (layers, width)
         sizes[f'L{layers}_w{width:g}'] = sum(p.numel() for p in slim.parameters())
     output = lemma_backbone.with_backbone(lemma, lemma_backbone.SlimBackbone(0.5, 1))(random_input())
+    shallow = lemma_backbone.with_backbone(lemma_teacher.LemmaSR(srb_nums=2).eval(),
+                                           lemma_backbone.SlimBackbone(0.35, 0))(random_input())
     print(f"7. slim LEMMA backbones: full width loads LEMMA's backbone, same output ({same:.1e}); "
           f"{sum(p.numel() for p in original.parameters()):,} parameters vs "
-          + ', '.join(f'{name} {n:,}' for name, n in sizes.items()) + f'; LEMMA with L1_w0.5 gives {tuple(output.shape)}')
-    assert same < TOLERANCE and tuple(output.shape) == (2, 4, 32, 128)
+          + ', '.join(f'{name} {n:,}' for name, n in sizes.items()) + f'; LEMMA with L1_w0.5 gives {tuple(output.shape)}'
+          f', with 2 SR blocks and L0_w0.35 {tuple(shallow.shape)}')
+    assert same < TOLERANCE and tuple(output.shape) == tuple(shallow.shape) == (2, 4, 32, 128)
     assert lemma.net.position_prior.vision.backbone is original  # with_backbone left LEMMA unchanged
 
 
